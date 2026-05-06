@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useRef, useMemo, useState } from "react";
 
 type VehicleRegistration = {
   placa: string;
@@ -10,7 +10,6 @@ type VehicleRegistration = {
   linea: string;
   modelo: string;
   kilometraje: string;
-  sede: string;
   ruta: string;
   conductor: string;
   licenciaConduccion: string;
@@ -28,6 +27,116 @@ type ChecklistItem = {
   label: string;
   critical: boolean;
 };
+
+const TIPOS_VEHICULO: string[] = [
+  "Turbo furgon seco",
+  "Turbo furgon refrigerado",
+  "Turbo estacado",
+  "Turbo cisterna",
+  "Turbo tanque",
+  "Turbo volqueta",
+  "Camion sencillo seco",
+  "Camion sencillo refrigerado",
+  "Camion sencillo estacado",
+  "Camion sencillo cisterna",
+  "Camion sencillo tanque",
+  "Camion sencillo volqueta",
+  "Doble troque seco",
+  "Doble troque refrigerado",
+  "Doble troque estacado",
+  "Doble troque cisterna",
+  "Doble troque volqueta",
+  "Tractocamion (tracto)",
+  "Mula seca",
+  "Mula refrigerada",
+  "Mula estacada",
+  "Mula cisterna",
+  "Mula tanque",
+  "Minimula seca",
+  "Minimula refrigerada",
+  "Minimula estacada",
+  "Trailer seco",
+  "Trailer refrigerado",
+  "Trailer estacado",
+  "Camioneta furgon seco",
+  "Camioneta furgon refrigerado",
+  "Camioneta estacada",
+  "Camioneta pick-up",
+  "Automovil",
+  "Microbus",
+  "Bus",
+  "Buseta",
+];
+
+const MARCAS_VEHICULO: string[] = [
+  "International",
+  "Freightliner",
+  "Kenworth",
+  "Peterbilt",
+  "Volvo",
+  "Scania",
+  "Mercedes-Benz",
+  "MAN",
+  "DAF",
+  "Mack",
+  "Western Star",
+  "Hino",
+  "Isuzu",
+  "Mitsubishi Fuso",
+  "Foton",
+  "Dongfeng",
+  "Sinotruk",
+  "FAW",
+  "JAC",
+  "DFSK",
+  "Chevrolet",
+  "Ford",
+  "Renault",
+  "Volkswagen",
+  "Toyota",
+  "Hyundai",
+  "Kia",
+  "Nissan",
+  "Mazda",
+  "Ram",
+];
+
+const LINEAS_POR_MARCA: Record<string, string[]> = {
+  international: ["LT", "LoneStar", "RH", "MV", "CV"],
+  freightliner: ["Cascadia", "Columbia", "Century", "M2", "FL"],
+  kenworth: ["T680", "T660", "T800", "T370", "W900"],
+  peterbilt: ["389", "579", "567", "348"],
+  volvo: ["FH", "FM", "FMX", "VM", "VNL"],
+  scania: ["R Series", "S Series", "G Series", "P Series"],
+  "mercedes-benz": ["Actros", "Axor", "Atego", "Accelo"],
+  man: ["TGX", "TGS", "TGM"],
+  daf: ["XF", "CF", "LF"],
+  mack: ["Anthem", "Granite", "Pinnacle"],
+  "western star": ["4700", "4900"],
+  hino: ["300", "500", "700"],
+  isuzu: ["ELF", "FVR", "FRR"],
+  "mitsubishi fuso": ["Canter", "Fighter"],
+  foton: ["Auman", "Aumark", "Forland"],
+  dongfeng: ["DFL", "KL"],
+  sinotruk: ["Howo", "Sitrak"],
+  faw: ["J6P", "Tiger V"],
+  jac: ["N Series", "Sunray"],
+  dfsk: ["C31", "C35", "K01S"],
+  chevrolet: ["NHR", "NQR", "NPR", "Silverado", "S10"],
+  ford: ["Cargo", "F-4000", "F-350", "Ranger"],
+  renault: ["D", "C", "T", "Kangoo"],
+  volkswagen: ["Delivery", "Constellation", "Meteor", "Amarok"],
+  toyota: ["Hilux", "Land Cruiser"],
+  hyundai: ["HD65", "HD78", "Mighty"],
+  kia: ["K2700", "K3000"],
+  nissan: ["Frontier", "NP300"],
+  mazda: ["BT-50"],
+  ram: ["700", "1200", "1500"],
+};
+
+function normalizeBrand(brand: string) {
+  return brand.trim().toLowerCase();
+}
 
 const checklistItems: ChecklistItem[] = [
   {
@@ -130,6 +239,37 @@ const groupedChecklist = checklistItems.reduce<Record<string, ChecklistItem[]>>(
   return acc;
 }, {});
 
+const sectionMeta: Record<string, { icon: string; gradient: string; border: string; light: string; textLight: string }> = {
+  Documentacion: {
+    icon: "📋",
+    gradient: "from-blue-700 to-blue-900",
+    border: "border-blue-500/50",
+    light: "bg-blue-950/50",
+    textLight: "text-blue-300",
+  },
+  "Seguridad activa y pasiva": {
+    icon: "🛡️",
+    gradient: "from-rose-700 to-rose-900",
+    border: "border-rose-500/50",
+    light: "bg-rose-950/50",
+    textLight: "text-rose-300",
+  },
+  "Condiciones tecnico-mecanicas": {
+    icon: "⚙️",
+    gradient: "from-violet-700 to-violet-900",
+    border: "border-violet-500/50",
+    light: "bg-violet-950/50",
+    textLight: "text-violet-300",
+  },
+  "Equipo de carretera": {
+    icon: "🧰",
+    gradient: "from-teal-700 to-teal-900",
+    border: "border-teal-500/50",
+    light: "bg-teal-950/50",
+    textLight: "text-teal-300",
+  },
+};
+
 const initialVehicle: VehicleRegistration = {
   placa: "",
   interno: "",
@@ -138,7 +278,6 @@ const initialVehicle: VehicleRegistration = {
   linea: "",
   modelo: "",
   kilometraje: "",
-  sede: "",
   ruta: "",
   conductor: "",
   licenciaConduccion: "",
@@ -174,6 +313,9 @@ export default function Home() {
   const [checklistState, setChecklistState] =
     useState<Record<string, Compliance>>(initialChecklistState);
   const [observaciones, setObservaciones] = useState("");
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(
+    Object.keys(groupedChecklist).reduce((acc, key) => ({ ...acc, [key]: true }), {}),
+  );
   const [error, setError] = useState("");
   const [result, setResult] = useState<{
     concepto: Concepto;
@@ -185,6 +327,11 @@ export default function Home() {
     () => requiredVehicleFields.filter((field) => !vehicleDraft[field].trim()),
     [vehicleDraft],
   );
+
+  const lineasDisponibles = useMemo(() => {
+    const key = normalizeBrand(vehicleDraft.marca);
+    return LINEAS_POR_MARCA[key] ?? [];
+  }, [vehicleDraft.marca]);
 
   const findings = useMemo(() => {
     const noCumpleCriticos = checklistItems
@@ -211,6 +358,20 @@ export default function Home() {
     }
     return "Apto";
   }, [findings.noCumpleCriticos.length, findings.noCumpleNoCriticos.length]);
+
+  const toggleSection = (section: string) => {
+    setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const handleNuevoRegistro = () => {
+    setVehicleDraft(initialVehicle);
+    setRegisteredVehicle(null);
+    setChecklistState(initialChecklistState);
+    setObservaciones("");
+    setError("");
+    setResult(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const handleRegisterVehicle = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -266,21 +427,30 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#fef3c7_0%,_#f8fafc_48%,_#ffffff_100%)] px-4 py-8 sm:px-8">
-      <main className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <section className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-[0_16px_40px_-24px_rgba(120,53,15,0.55)]">
-          <div className="bg-amber-700 px-6 py-5 text-white">
+    <div className="min-h-screen bg-[#0b0e14] px-3 py-4 sm:px-6 sm:py-6 lg:px-8">
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 sm:gap-6">
+        <section className="relative overflow-visible rounded-xl border border-zinc-700 bg-[#13161f] shadow-[0_16px_40px_-24px_rgba(0,0,0,0.9)] sm:rounded-2xl">
+          <div className="border-b border-zinc-700 bg-gradient-to-r from-zinc-800 to-zinc-900 px-4 py-4 text-white sm:px-6 sm:py-5">
             <p className="text-xs font-semibold uppercase tracking-[0.2em]">
               Inspeccion preoperacional PESV
             </p>
-            <h1 className="mt-1 text-2xl font-bold sm:text-3xl">Encabezado de registro del vehiculo</h1>
-            <p className="mt-2 text-sm text-amber-100">
+            <div className="mt-1 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+              <h1 className="text-xl font-bold sm:text-2xl lg:text-3xl">Encabezado de registro del vehiculo</h1>
+              <button
+                type="button"
+                onClick={handleNuevoRegistro}
+                className="h-11 w-full rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 text-sm font-semibold text-cyan-300 backdrop-blur-sm transition hover:bg-cyan-500/20 sm:h-auto sm:w-auto sm:py-2"
+              >
+                + Nuevo registro
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-zinc-400">
               Este registro se diligencia antes del checklist para asociar cada inspeccion a un carro y
               una placa.
             </p>
           </div>
 
-          <form className="grid gap-4 p-6 sm:grid-cols-2 lg:grid-cols-4" onSubmit={handleRegisterVehicle}>
+          <form className="grid gap-3 p-4 sm:grid-cols-2 sm:gap-4 sm:p-6 lg:grid-cols-4" onSubmit={handleRegisterVehicle}>
             <Field
               label="Placa *"
               value={vehicleDraft.placa}
@@ -293,22 +463,29 @@ export default function Home() {
               placeholder="Movil 12"
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, interno: value }))}
             />
-            <Field
+            <ComboField
               label="Tipo de vehiculo *"
               value={vehicleDraft.tipo}
-              placeholder="Camioneta"
+              placeholder="Busca o escribe el tipo..."
+              options={TIPOS_VEHICULO}
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, tipo: value }))}
             />
-            <Field
+            <ComboField
               label="Marca *"
               value={vehicleDraft.marca}
-              placeholder="Renault"
+              placeholder="Busca o escribe la marca..."
+              options={MARCAS_VEHICULO}
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, marca: value }))}
             />
-            <Field
+            <ComboField
               label="Linea"
               value={vehicleDraft.linea}
-              placeholder="Duster"
+              placeholder={
+                vehicleDraft.marca.trim()
+                  ? "Selecciona o escribe una linea..."
+                  : "Primero selecciona una marca"
+              }
+              options={lineasDisponibles}
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, linea: value }))}
             />
             <Field
@@ -322,12 +499,6 @@ export default function Home() {
               value={vehicleDraft.kilometraje}
               placeholder="63800"
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, kilometraje: value }))}
-            />
-            <Field
-              label="Sede"
-              value={vehicleDraft.sede}
-              placeholder="Bogota"
-              onChange={(value) => setVehicleDraft((prev) => ({ ...prev, sede: value }))}
             />
             <Field
               label="Ruta"
@@ -364,19 +535,19 @@ export default function Home() {
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, horaInspeccion: value }))}
             />
 
-            <div className="flex flex-wrap items-center gap-3 pt-2 sm:col-span-2 lg:col-span-4">
+            <div className="flex flex-col gap-3 pt-2 sm:col-span-2 sm:flex-row sm:flex-wrap sm:items-center lg:col-span-4">
               <button
                 type="submit"
-                className="h-11 rounded-lg bg-amber-700 px-5 text-sm font-semibold text-white transition hover:bg-amber-800"
+                className="h-11 w-full rounded-lg bg-cyan-600 px-5 text-sm font-semibold text-white transition hover:bg-cyan-500 sm:w-auto"
               >
                 Registrar encabezado
               </button>
               {registeredVehicle ? (
-                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                <p className="rounded-lg border border-emerald-700 bg-emerald-950/50 px-3 py-2 text-sm font-medium text-emerald-300">
                   Vehiculo activo: {registeredVehicle.placa} - {registeredVehicle.marca} {registeredVehicle.modelo}
                 </p>
               ) : (
-                <p className="text-sm text-slate-600">
+                <p className="text-sm text-zinc-500">
                   Debes registrar el encabezado para habilitar la inspeccion.
                 </p>
               )}
@@ -384,47 +555,51 @@ export default function Home() {
           </form>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-6 flex flex-wrap items-center gap-3">
-            <h2 className="text-xl font-bold text-slate-900">Checklist de requisitos PESV</h2>
+        <section className="rounded-xl border border-zinc-700 bg-[#13161f] p-4 shadow-sm sm:rounded-2xl sm:p-6">
+          <div className="mb-4 flex flex-col gap-2 sm:mb-6 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+            <h2 className="text-lg font-bold text-zinc-100 sm:text-xl">Checklist de requisitos PESV</h2>
             <span
               className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                registeredVehicle ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+                registeredVehicle ? "bg-emerald-900/60 text-emerald-300" : "bg-rose-900/60 text-rose-300"
               }`}
             >
               {registeredVehicle ? "Habilitado" : "Bloqueado hasta registrar encabezado"}
             </span>
           </div>
 
-          <form className="space-y-6" onSubmit={handleSubmitInspection}>
-            {Object.entries(groupedChecklist).map(([sectionName, items]) => (
-              <section key={sectionName} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-700">
-                  {sectionName}
-                </h3>
-
-                <div className="space-y-3">
-                  {items.map((item) => (
-                    <ChecklistRow
-                      key={item.id}
-                      item={item}
-                      value={checklistState[item.id]}
-                      disabled={!registeredVehicle}
-                      onChange={(nextValue) =>
-                        setChecklistState((prev) => ({
-                          ...prev,
-                          [item.id]: nextValue,
-                        }))
-                      }
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
+          <form className="space-y-4" onSubmit={handleSubmitInspection}>
+            {Object.entries(groupedChecklist).map(([sectionName, items]) => {
+              const criticalIssues = items.filter(
+                (item) => item.critical && checklistState[item.id] === "No cumple",
+              ).length;
+              const minorIssues = items.filter(
+                (item) => !item.critical && checklistState[item.id] === "No cumple",
+              ).length;
+              const noAplicaCount = items.filter(
+                (item) => checklistState[item.id] === "No aplica",
+              ).length;
+              return (
+                <AccordionSection
+                  key={sectionName}
+                  name={sectionName}
+                  items={items}
+                  isOpen={openSections[sectionName] ?? true}
+                  criticalIssues={criticalIssues}
+                  minorIssues={minorIssues}
+                  noAplicaCount={noAplicaCount}
+                  onToggle={() => toggleSection(sectionName)}
+                  checklistState={checklistState}
+                  disabled={!registeredVehicle}
+                  onItemChange={(id, value) =>
+                    setChecklistState((prev) => ({ ...prev, [id]: value }))
+                  }
+                />
+              );
+            })}
 
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="mb-1 block text-sm font-semibold text-slate-700">
+                <label className="mb-1 block text-sm font-semibold text-zinc-300">
                   Observaciones (obligatorio si hay No cumple)
                 </label>
                 <textarea
@@ -433,29 +608,32 @@ export default function Home() {
                   onChange={(event) => setObservaciones(event.target.value)}
                   disabled={!registeredVehicle}
                   placeholder="Registrar hallazgos, acciones correctivas y responsable."
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-amber-300 transition focus:border-amber-500 focus:ring disabled:bg-slate-100"
+                  className="w-full rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none ring-cyan-500/30 transition focus:border-cyan-500 focus:ring disabled:opacity-50"
                 />
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-700">Concepto sugerido por el sistema</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{conceptoSugerido}</p>
-                <p className="mt-3 text-xs text-slate-600">
+              <div className="rounded-xl border border-zinc-700 bg-zinc-800/50 p-4">
+                <p className="text-sm font-semibold text-zinc-400">Concepto sugerido por el sistema</p>
+                <p className="mt-2 text-2xl font-bold text-zinc-100">{conceptoSugerido}</p>
+                <p className="mt-3 text-xs text-zinc-500">
                   Regla: cualquier no conformidad critica marca No apto. Si solo hay no conformidades
                   no criticas, el concepto es Apto con observaciones.
+                </p>
+                <p className="mt-2 text-xs text-amber-300">
+                  Si presenta alguna falla, comunicarse con su desarrollador.
                 </p>
               </div>
             </div>
 
-            {error ? <p className="text-sm font-semibold text-rose-700">{error}</p> : null}
+            {error ? <p className="text-sm font-semibold text-rose-400">{error}</p> : null}
 
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <button
                 type="submit"
                 disabled={!registeredVehicle}
-                className="h-11 rounded-lg bg-slate-900 px-6 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                className="h-11 w-full rounded-lg bg-cyan-600 px-6 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500 sm:w-auto"
               >
-                Guardar inspeccion (frontend)
+                Guardar inspeccion
               </button>
               <button
                 type="button"
@@ -465,17 +643,24 @@ export default function Home() {
                   setResult(null);
                   setError("");
                 }}
-                className="h-11 rounded-lg border border-slate-300 px-6 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                className="h-11 w-full rounded-lg border border-zinc-600 bg-zinc-800 px-6 text-sm font-semibold text-zinc-300 transition hover:bg-zinc-700 sm:w-auto"
               >
                 Restablecer checklist
+              </button>
+              <button
+                type="button"
+                onClick={handleNuevoRegistro}
+                className="h-11 w-full rounded-lg border border-violet-500/50 bg-violet-900/30 px-6 text-sm font-semibold text-violet-300 transition hover:bg-violet-900/50 sm:w-auto"
+              >
+                + Nuevo registro
               </button>
             </div>
           </form>
         </section>
 
         {result ? (
-          <section className="rounded-2xl border border-slate-800 bg-slate-950 p-5 text-slate-100 shadow-sm">
-            <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-amber-300">
+          <section className="rounded-xl border border-zinc-700 bg-[#0b0e14] p-4 text-zinc-100 shadow-sm sm:rounded-2xl sm:p-5">
+            <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-cyan-400">
               Registro generado para persistencia
             </h3>
             <p className="mt-2 text-sm">
@@ -503,6 +688,81 @@ export default function Home() {
   );
 }
 
+type ComboFieldProps = {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+};
+
+function ComboField({ label, value, options, onChange, placeholder }: ComboFieldProps) {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = value.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.toLowerCase().includes(q));
+  }, [value, options]);
+
+  const handleBlur = () => {
+    closeTimer.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  const handleSelect = (option: string) => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    onChange(option);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative z-20 flex min-w-0 flex-col gap-1">
+      <label className="text-sm font-semibold text-zinc-300">{label}</label>
+      <div className="relative">
+        <input
+          value={value}
+          onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={handleBlur}
+          placeholder={placeholder}
+          autoComplete="off"
+          className="h-11 w-full rounded-lg border border-zinc-600 bg-zinc-800 px-3 pr-9 text-sm text-zinc-100 placeholder-zinc-500 outline-none ring-cyan-500/30 transition focus:border-cyan-500 focus:ring"
+        />
+        <svg
+          className={`pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
+
+      {open && filtered.length > 0 && (
+        <ul className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 max-h-56 overflow-y-auto rounded-xl border border-zinc-600 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.8)] backdrop-blur-sm" style={{ background: "#1a1d27" }}>
+          {filtered.map((option) => (
+            <li key={option}>
+              <button
+                type="button"
+                onMouseDown={() => handleSelect(option)}
+                className={`flex w-full items-center px-4 py-2.5 text-left text-sm transition-colors hover:bg-cyan-500/10 hover:text-cyan-300 ${
+                  value === option ? "bg-cyan-900/40 text-cyan-300 font-semibold" : "text-zinc-200"
+                }`}
+              >
+                {value === option && (
+                  <svg className="mr-2 h-3.5 w-3.5 shrink-0 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+                {option}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 type FieldProps = {
   label: string;
   value: string;
@@ -512,13 +772,13 @@ type FieldProps = {
 
 function Field({ label, value, onChange, placeholder }: FieldProps) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-sm font-semibold text-slate-700">{label}</label>
+    <div className="min-w-0 flex flex-col gap-1">
+      <label className="text-sm font-semibold text-zinc-300">{label}</label>
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-11 rounded-lg border border-slate-300 px-3 text-sm outline-none ring-amber-300 transition focus:border-amber-500 focus:ring"
+        className="h-11 rounded-lg border border-zinc-600 bg-zinc-800 px-3 text-sm text-zinc-100 placeholder-zinc-500 outline-none ring-cyan-500/30 transition focus:border-cyan-500 focus:ring"
       />
     </div>
   );
@@ -532,13 +792,13 @@ type DateFieldProps = {
 
 function DateField({ label, value, onChange }: DateFieldProps) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-sm font-semibold text-slate-700">{label}</label>
+    <div className="min-w-0 flex flex-col gap-1">
+      <label className="text-sm font-semibold text-zinc-300">{label}</label>
       <input
         type="date"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-11 rounded-lg border border-slate-300 px-3 text-sm outline-none ring-amber-300 transition focus:border-amber-500 focus:ring"
+        className="h-11 rounded-lg border border-zinc-600 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none ring-cyan-500/30 transition focus:border-cyan-500 focus:ring"
       />
     </div>
   );
@@ -552,14 +812,135 @@ type TimeFieldProps = {
 
 function TimeField({ label, value, onChange }: TimeFieldProps) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-sm font-semibold text-slate-700">{label}</label>
+    <div className="min-w-0 flex flex-col gap-1">
+      <label className="text-sm font-semibold text-zinc-300">{label}</label>
       <input
         type="time"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-11 rounded-lg border border-slate-300 px-3 text-sm outline-none ring-amber-300 transition focus:border-amber-500 focus:ring"
+        className="h-11 rounded-lg border border-zinc-600 bg-zinc-800 px-3 text-sm text-zinc-100 outline-none ring-cyan-500/30 transition focus:border-cyan-500 focus:ring"
       />
+    </div>
+  );
+}
+
+type AccordionSectionProps = {
+  name: string;
+  items: ChecklistItem[];
+  isOpen: boolean;
+  criticalIssues: number;
+  minorIssues: number;
+  noAplicaCount: number;
+  onToggle: () => void;
+  checklistState: Record<string, Compliance>;
+  disabled: boolean;
+  onItemChange: (id: string, value: Compliance) => void;
+};
+
+function AccordionSection({
+  name,
+  items,
+  isOpen,
+  criticalIssues,
+  minorIssues,
+  noAplicaCount,
+  onToggle,
+  checklistState,
+  disabled,
+  onItemChange,
+}: AccordionSectionProps) {
+  const meta = sectionMeta[name] ?? {
+    icon: "📌",
+    gradient: "from-zinc-600 to-zinc-700",
+    border: "border-zinc-600",
+    light: "bg-zinc-800/60",
+    textLight: "text-zinc-300",
+  };
+
+  const statusLabel =
+    criticalIssues > 0
+      ? `${criticalIssues} critico${criticalIssues > 1 ? "s" : ""}`
+      : minorIssues > 0
+        ? `${minorIssues} observacion${minorIssues > 1 ? "es" : ""}`
+        : noAplicaCount > 0
+          ? `${noAplicaCount} no aplica`
+        : "OK";
+
+  const statusStyle =
+    criticalIssues > 0
+      ? "border-rose-700 bg-rose-950/60 text-rose-300"
+      : minorIssues > 0
+        ? "border-amber-700 bg-amber-950/60 text-amber-300"
+        : noAplicaCount > 0
+          ? "border-sky-700 bg-sky-950/60 text-sky-300"
+        : "border-emerald-700 bg-emerald-950/60 text-emerald-300";
+
+  return (
+    <div
+      className={`overflow-hidden rounded-xl border-2 shadow-sm transition-shadow hover:shadow-md sm:rounded-2xl ${
+        isOpen ? `${meta.border}` : "border-zinc-700"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`flex w-full items-center gap-3 px-3 py-3 text-left transition-all duration-200 sm:gap-4 sm:px-5 sm:py-4 ${
+          isOpen
+            ? `bg-gradient-to-r ${meta.gradient} text-white`
+            : `${meta.light} hover:brightness-95`
+        }`}
+      >
+        <span className="text-2xl leading-none">{meta.icon}</span>
+
+        <div className="flex-1 min-w-0">
+          <p
+            className={`text-sm font-bold uppercase tracking-wider ${
+              isOpen ? "text-white" : meta.textLight
+            }`}
+          >
+            {name}
+          </p>
+          <p className={`text-xs ${isOpen ? "text-white/70" : "text-zinc-500"}`}>
+            {items.length} items
+          </p>
+        </div>
+
+        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold sm:px-3 sm:text-xs ${statusStyle}`}>
+          {statusLabel}
+        </span>
+
+        <svg
+          className={`h-5 w-5 shrink-0 transition-transform duration-300 ${
+            isOpen ? "rotate-180 text-white" : "text-zinc-500"
+          }`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      <div
+        className={`grid transition-all duration-300 ease-in-out ${
+          isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        }`}
+      >
+        <div className="overflow-hidden bg-zinc-900/60">
+          <div className="space-y-3 p-3 sm:p-4">
+            {items.map((item) => (
+              <ChecklistRow
+                key={item.id}
+                item={item}
+                value={checklistState[item.id]}
+                disabled={disabled}
+                onChange={(value) => onItemChange(item.id, value)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -574,20 +955,30 @@ type ChecklistRowProps = {
 function ChecklistRow({ item, value, disabled, onChange }: ChecklistRowProps) {
   const options: Compliance[] = ["Cumple", "No cumple", "No aplica"];
 
+  const selectedOptionStyle = (option: Compliance) => {
+    if (option === "No cumple") {
+      return "border-rose-500 bg-rose-900/50 text-rose-300";
+    }
+    if (option === "No aplica") {
+      return "border-sky-500 bg-sky-900/50 text-sky-300";
+    }
+    return "border-emerald-500 bg-emerald-900/50 text-emerald-300";
+  };
+
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/60 p-3">
       <div className="mb-2 flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-slate-800">{item.label}</p>
+        <p className="text-sm font-medium text-zinc-200">{item.label}</p>
         <span
           className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${
-            item.critical ? "bg-rose-100 text-rose-700" : "bg-slate-200 text-slate-700"
+            item.critical ? "bg-rose-950/70 text-rose-400" : "bg-zinc-700 text-zinc-400"
           }`}
         >
           {item.critical ? "Critico" : "No critico"}
         </span>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         {options.map((option) => {
           const selected = value === option;
           return (
@@ -596,11 +987,11 @@ function ChecklistRow({ item, value, disabled, onChange }: ChecklistRowProps) {
               type="button"
               disabled={disabled}
               onClick={() => onChange(option)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+              className={`w-full rounded-lg border px-3 py-2 text-center text-xs font-semibold transition ${
                 selected
-                  ? "border-amber-600 bg-amber-100 text-amber-900"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              } disabled:cursor-not-allowed disabled:opacity-60`}
+                  ? selectedOptionStyle(option)
+                  : "border-zinc-600 bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
+              } disabled:cursor-not-allowed disabled:opacity-40`}
             >
               {option}
             </button>
