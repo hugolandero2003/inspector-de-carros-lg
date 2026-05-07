@@ -15,6 +15,7 @@ type InspectionRecord = {
     modelo: string;
     tipo: string;
     conductor: string;
+    licenciaConduccion: string;
     inspector: string;
     fechaInspeccion: string;
     horaInspeccion: string;
@@ -33,6 +34,23 @@ type InspectionRecord = {
   };
 };
 
+type ApiInspection = {
+  id: string;
+  placa: string;
+  tipo: string;
+  marca: string;
+  modelo: string;
+  conductor: string;
+  licencia: string;
+  inspector: string;
+  fecha: string;
+  hora: string;
+  concepto: string;
+  observaciones: string;
+  checklist: string;
+  createdAt: string;
+};
+
 export default function AdminPage() {
   const [records, setRecords] = useState<InspectionRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,58 +61,104 @@ export default function AdminPage() {
   const router = useRouter();
   const auth = useAuth();
 
-  // Verificar autenticación
-  useEffect(() => {
-    if (auth.isAuthenticated && auth.user) {
-      setAuthenticated(true);
-      setCurrentUser(auth.user);
-      return;
-    }
-
-    // Fallback a localStorage
-    const storedUser = localStorage.getItem("pesv_user");
-    if (storedUser) {
-      try {
-        const parsed = JSON.parse(storedUser);
-        setAuthenticated(true);
-        setCurrentUser(parsed);
-      } catch {
-        router.push("/login");
-      }
-    } else {
-      router.push("/login");
-    }
-  }, [auth, router]);
-
-  // Cargar registros desde localStorage
-  useEffect(() => {
-    if (!authenticated) return;
-
+  const mapApiToRecord = (entry: ApiInspection): InspectionRecord => {
+    let checklistParsed: InspectionRecord["inspeccion"]["checklist"] = [];
     try {
-      const stored = localStorage.getItem("pesv_inspections");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setRecords(Array.isArray(parsed) ? parsed : []);
+      const parsed = JSON.parse(entry.checklist);
+      checklistParsed = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      checklistParsed = [];
+    }
+
+    return {
+      id: entry.id,
+      vehiculo: {
+        placa: entry.placa,
+        marca: entry.marca,
+        modelo: entry.modelo,
+        tipo: entry.tipo,
+        conductor: entry.conductor,
+        licenciaConduccion: entry.licencia,
+        inspector: entry.inspector,
+        fechaInspeccion: entry.fecha,
+        horaInspeccion: entry.hora,
+      },
+      inspeccion: {
+        conceptoFinal: entry.concepto,
+        observaciones: entry.observaciones,
+        fechaRegistro: entry.createdAt,
+        checklist: checklistParsed,
+      },
+    };
+  };
+
+  const loadRecords = async (token: string) => {
+    try {
+      setLoading(true);
+      const response = await fetch("/api/inspections", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          auth.logout();
+          router.push("/login");
+          return;
+        }
+        throw new Error("No se pudieron cargar los registros");
       }
+
+      const data = (await response.json()) as ApiInspection[];
+      setRecords(data.map(mapApiToRecord));
     } catch (error) {
       console.error("Error loading records:", error);
+      setRecords([]);
     } finally {
       setLoading(false);
     }
-  }, [authenticated]);
+  };
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.user || !auth.token) {
+      setAuthenticated(false);
+      setCurrentUser(null);
+      setLoading(false);
+      router.push("/login");
+      return;
+    }
+
+    setAuthenticated(true);
+    setCurrentUser(auth.user);
+    void loadRecords(auth.token);
+  }, [auth.isAuthenticated, auth.user, auth.token, router]);
 
   const handleLogout = () => {
-    localStorage.removeItem("pesv_user");
     auth.logout();
     router.push("/login");
   };
 
-  const handleDeleteRecord = (id: string) => {
+  const handleDeleteRecord = async (id: string) => {
+    if (!auth.token) {
+      router.push("/login");
+      return;
+    }
+
     if (confirm("¿Estás seguro de que quieres eliminar este registro?")) {
-      const updated = records.filter((r) => r.id !== id);
-      setRecords(updated);
-      localStorage.setItem("pesv_inspections", JSON.stringify(updated));
-      setSelectedRecord(null);
+      try {
+        const response = await fetch(`/api/inspections/${id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${auth.token}` },
+        });
+
+        if (!response.ok) {
+          throw new Error("No fue posible eliminar el registro");
+        }
+
+        setRecords((prev) => prev.filter((r) => r.id !== id));
+        setSelectedRecord(null);
+      } catch (error) {
+        console.error("Error deleting record:", error);
+      }
     }
   };
 
@@ -126,7 +190,7 @@ export default function AdminPage() {
         r.vehiculo.tipo ?? "-",
         `${r.vehiculo.marca} ${r.vehiculo.modelo}`,
         r.vehiculo.conductor,
-        (r.vehiculo as Record<string, string>).licenciaConduccion ?? "-",
+        r.vehiculo.licenciaConduccion ?? "-",
         r.vehiculo.inspector,
         r.vehiculo.fechaInspeccion,
         r.vehiculo.horaInspeccion,
@@ -233,7 +297,7 @@ export default function AdminPage() {
         r.vehiculo.marca,
         r.vehiculo.modelo,
         r.vehiculo.conductor,
-        (r.vehiculo as Record<string, string>).licenciaConduccion ?? "-",
+        r.vehiculo.licenciaConduccion ?? "-",
         r.vehiculo.inspector,
         r.vehiculo.fechaInspeccion,
         r.vehiculo.horaInspeccion,
@@ -254,7 +318,7 @@ export default function AdminPage() {
         [],
         ["Placa", r.vehiculo.placa, "", "Inspector", r.vehiculo.inspector],
         ["Tipo", r.vehiculo.tipo ?? "-", "", "Conductor", r.vehiculo.conductor],
-        ["Marca", r.vehiculo.marca, "", "Lic. Conducción", (r.vehiculo as Record<string, string>).licenciaConduccion ?? "-"],
+        ["Marca", r.vehiculo.marca, "", "Lic. Conducción", r.vehiculo.licenciaConduccion ?? "-"],
         ["Modelo", r.vehiculo.modelo, "", "Fecha", r.vehiculo.fechaInspeccion],
         ["Concepto", r.inspeccion.conceptoFinal, "", "Hora", r.vehiculo.horaInspeccion],
         [],

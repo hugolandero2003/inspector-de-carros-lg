@@ -2,6 +2,7 @@
 
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/app/context/AuthContext";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const auth = useAuth();
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -16,17 +18,13 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Simular pequeño delay para UX
-      await new Promise((resolve) => setTimeout(resolve, 600));
-
-      // Simple auth: credenciales hardcodeadas
-      if (username === "admin" && password === "admin123") {
-        const userData = { username };
-        localStorage.setItem("pesv_user", JSON.stringify(userData));
-        router.push("/admin");
-      } else {
-        setError("Usuario o contraseña incorrectos");
+      const result = await auth.login(username.trim(), password);
+      if (!result.ok) {
+        setError(result.error ?? "Usuario o contraseña incorrectos");
+        return;
       }
+
+      router.push("/admin");
     } finally {
       setLoading(false);
     }

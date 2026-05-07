@@ -42,9 +42,6 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const payload = getTokenFromRequest(req);
-  if (!payload) {
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  }
 
   try {
     const body = await req.json();
@@ -58,7 +55,7 @@ export async function POST(req: NextRequest) {
         placa, interno, tipo, marca, linea, modelo, kilometraje, ruta,
         conductor, licencia, inspector, fecha, hora, concepto, observaciones,
         checklist: typeof checklist === "string" ? checklist : JSON.stringify(checklist),
-        userId: payload.userId,
+        userId: payload?.userId,
       },
     });
 

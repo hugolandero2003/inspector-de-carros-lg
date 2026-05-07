@@ -1,7 +1,15 @@
 import { PrismaClient } from "../app/generated/prisma/client";
 import bcrypt from "bcryptjs";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
 
-const prisma = new PrismaClient({ accelerateUrl: "prisma://localhost" });
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL no está definida para ejecutar el seed");
+}
+
+const adapter = new PrismaPg(new Pool({ connectionString: databaseUrl }));
+const prisma = new PrismaClient({ adapter });
 
 async function main() {
   const hashedPassword = await bcrypt.hash("admin123", 12);

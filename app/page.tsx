@@ -391,7 +391,7 @@ export default function Home() {
     });
   };
 
-  const handleSubmitInspection = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmitInspection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
 
@@ -405,31 +405,45 @@ export default function Home() {
       return;
     }
 
-    const payload = {
-      id: `${registeredVehicle.placa}-${new Date().getTime()}`,
-      vehiculo: registeredVehicle,
-      inspeccion: {
-        checklist: checklistItems.map((item) => ({
-          id: item.id,
-          item: item.label,
-          seccion: item.section,
-          criticidad: item.critical ? "Critico" : "No critico",
-          estado: checklistState[item.id],
-        })),
-        observaciones,
-        conceptoFinal: conceptoSugerido,
-        fechaRegistro: new Date().toISOString(),
-      },
-    };
-
-    // Guardar en localStorage
     try {
-      const existing = localStorage.getItem("pesv_inspections");
-      const records = existing ? JSON.parse(existing) : [];
-      records.push(payload);
-      localStorage.setItem("pesv_inspections", JSON.stringify(records));
+      const checklist = checklistItems.map((item) => ({
+        id: item.id,
+        item: item.label,
+        seccion: item.section,
+        criticidad: item.critical ? "Critico" : "No critico",
+        estado: checklistState[item.id],
+      }));
+
+      const response = await fetch("/api/inspections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          placa: registeredVehicle.placa,
+          interno: registeredVehicle.interno,
+          tipo: registeredVehicle.tipo,
+          marca: registeredVehicle.marca,
+          linea: registeredVehicle.linea,
+          modelo: registeredVehicle.modelo,
+          kilometraje: registeredVehicle.kilometraje,
+          ruta: registeredVehicle.ruta,
+          conductor: registeredVehicle.conductor,
+          licencia: registeredVehicle.licenciaConduccion,
+          inspector: registeredVehicle.inspector,
+          fecha: registeredVehicle.fechaInspeccion,
+          hora: registeredVehicle.horaInspeccion,
+          concepto: conceptoSugerido,
+          observaciones,
+          checklist,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("No se pudo guardar la inspección");
+      }
     } catch (error) {
-      console.error("Error saving record:", error);
+      console.error("Error saving inspection:", error);
+      setError("No fue posible guardar la inspección. Intenta nuevamente.");
+      return;
     }
 
     setSuccessModal({
