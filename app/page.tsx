@@ -29,6 +29,14 @@ type ChecklistItem = {
   critical: boolean;
 };
 
+type DocumentExpirations = {
+  soat: string;
+  tecnomecanica: string;
+  licencia: string;
+};
+
+const DUPLICATE_DAILY_PLATE_MESSAGE = "Esta placa ya tiene inspección registrada.";
+
 const TIPOS_VEHICULO: string[] = [
   "Turbo furgon seco",
   "Turbo furgon refrigerado",
@@ -137,6 +145,25 @@ const LINEAS_POR_MARCA: Record<string, string[]> = {
 
 function normalizeBrand(brand: string) {
   return brand.trim().toLowerCase();
+}
+
+function normalizePlate(plate: string) {
+  return plate.toUpperCase().replace(/\s+/g, "").trim();
+}
+
+function extractDocumentExpirationsFromChecklist(rawChecklist: string): DocumentExpirations {
+  try {
+    const parsed = JSON.parse(rawChecklist) as Array<{ id?: string; vencimiento?: string }>;
+    if (!Array.isArray(parsed)) return initialDocumentExpirations;
+
+    const soat = parsed.find((item) => item.id === "doc_soat")?.vencimiento ?? "";
+    const tecnomecanica = parsed.find((item) => item.id === "doc_tecno")?.vencimiento ?? "";
+    const licencia = parsed.find((item) => item.id === "doc_licencia")?.vencimiento ?? "";
+
+    return { soat, tecnomecanica, licencia };
+  } catch {
+    return initialDocumentExpirations;
+  }
 }
 
 const checklistItems: ChecklistItem[] = [
@@ -287,6 +314,12 @@ const initialVehicle: VehicleRegistration = {
   horaInspeccion: "",
 };
 
+const initialDocumentExpirations: DocumentExpirations = {
+  soat: "",
+  tecnomecanica: "",
+  licencia: "",
+};
+
 const requiredVehicleFields: Array<keyof VehicleRegistration> = [
   "placa",
   "tipo",
@@ -320,6 +353,14 @@ export default function Home() {
     Object.keys(groupedChecklist).reduce((acc, key) => ({ ...acc, [key]: true }), {}),
   );
   const [error, setError] = useState("");
+  const [plateHint, setPlateHint] = useState("");
+  const [isPrefillingPlate, setIsPrefillingPlate] = useState(false);
+  const [lastPrefilledPlate, setLastPrefilledPlate] = useState("");
+  const [lastPrefilledConductor, setLastPrefilledConductor] = useState("");
+  const [documentExpirations, setDocumentExpirations] =
+    useState<DocumentExpirations>(initialDocumentExpirations);
+  const [requiresLicenseExpirationUpdate, setRequiresLicenseExpirationUpdate] = useState(false);
+  const [dailyPlateLocked, setDailyPlateLocked] = useState(false);
   const [successModal, setSuccessModal] = useState<{
     concepto: Concepto;
     noCumpleCriticos: string[];
@@ -365,12 +406,140 @@ export default function Home() {
     setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
+  const handlePlateBlur = async () => {
+    const normalizedPlate = normalizePlate(vehicleDraft.placa);
+    setVehicleDraft((prev) => ({ ...prev, placa: normalizedPlate }));
+    setDailyPlateLocked(false);
+
+    if (!normalizedPlate || normalizedPlate.length < 5 || normalizedPlate === lastPrefilledPlate) {
+      return;
+    }
+
+    setPlateHint("");
+    setIsPrefillingPlate(true);
+
+    try {
+      const response = await fetch(`/api/inspections/plate/${encodeURIComponent(normalizedPlate)}`, {
+        cache: "no-store",
+      });
+
+      if (response.status === 404) {
+        setPlateHint("No hay historial para esta placa. Puedes diligenciar los datos manualmente.");
+        setLastPrefilledPlate("");
+        return;
+      }
+
+      if (!response.ok) {
+        let backendMessage = "No se pudieron autocompletar los datos por placa en este momento.";
+        try {
+          const payload = (await response.json()) as { error?: string };
+          if (payload?.error) {
+            backendMessage = payload.error;
+          }
+        } catch {
+          // Si la respuesta no trae JSON valido, mantenemos un mensaje generico.
+        }
+
+        setPlateHint(backendMessage);
+        setLastPrefilledPlate("");
+        return;
+      }
+
+      const data = (await response.json()) as {
+        placa: string;
+        interno: string;
+        tipo: string;
+        marca: string;
+        linea: string;
+        modelo: string;
+        kilometraje: string;
+        ruta: string;
+        conductor: string;
+        licencia: string;
+        inspector: string;
+        fecha: string;
+        hora: string;
+        checklist: string;
+        alreadyRegisteredToday?: boolean;
+      };
+
+      if (data.alreadyRegisteredToday) {
+        setDailyPlateLocked(true);
+        setPlateHint("");
+      }
+
+      const previousDocumentExpirations = extractDocumentExpirationsFromChecklist(data.checklist);
+
+      setVehicleDraft((prev) => ({
+        ...prev,
+        placa: data.placa,
+        interno: data.interno,
+        tipo: data.tipo,
+        marca: data.marca,
+        linea: data.linea,
+        modelo: data.modelo,
+        kilometraje: data.kilometraje,
+        ruta: data.ruta,
+        conductor: data.conductor,
+        licenciaConduccion: data.licencia,
+        inspector: data.inspector,
+        fechaInspeccion: data.fecha,
+        horaInspeccion: data.hora,
+      }));
+      setDocumentExpirations(previousDocumentExpirations);
+      setRequiresLicenseExpirationUpdate(false);
+      setLastPrefilledConductor(data.conductor.trim().toLowerCase());
+      setLastPrefilledPlate(normalizedPlate);
+      if (!data.alreadyRegisteredToday) {
+        setPlateHint("Se cargaron datos previos de esta placa. Puedes actualizar kilometraje, ruta, conductor y demás campos.");
+      }
+    } catch (lookupError) {
+      console.error("Error fetching plate data:", lookupError);
+      setPlateHint("No se pudieron autocompletar los datos por placa en este momento.");
+    } finally {
+      setIsPrefillingPlate(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!registeredVehicle) {
+      return;
+    }
+
+    setRegisteredVehicle({
+      ...vehicleDraft,
+      placa: normalizePlate(vehicleDraft.placa),
+    });
+  }, [vehicleDraft]);
+
+  useEffect(() => {
+    const currentConductor = vehicleDraft.conductor.trim().toLowerCase();
+    if (!currentConductor || !lastPrefilledConductor) {
+      return;
+    }
+
+    if (currentConductor !== lastPrefilledConductor) {
+      setRequiresLicenseExpirationUpdate(true);
+      setDocumentExpirations((prev) => ({ ...prev, licencia: "" }));
+      return;
+    }
+
+    setRequiresLicenseExpirationUpdate(false);
+  }, [vehicleDraft.conductor, lastPrefilledConductor]);
+
   const handleNuevoRegistro = () => {
     setVehicleDraft(initialVehicle);
     setRegisteredVehicle(null);
     setChecklistState(initialChecklistState);
     setObservaciones("");
     setError("");
+    setPlateHint("");
+    setIsPrefillingPlate(false);
+    setLastPrefilledPlate("");
+    setLastPrefilledConductor("");
+    setDocumentExpirations(initialDocumentExpirations);
+    setRequiresLicenseExpirationUpdate(false);
+    setDailyPlateLocked(false);
     setSuccessModal(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -387,7 +556,7 @@ export default function Home() {
 
     setRegisteredVehicle({
       ...vehicleDraft,
-      placa: vehicleDraft.placa.toUpperCase().replace(/\s+/g, ""),
+      placa: normalizePlate(vehicleDraft.placa),
     });
   };
 
@@ -397,6 +566,35 @@ export default function Home() {
 
     if (!registeredVehicle) {
       setError("Primero debes registrar el vehiculo en el encabezado.");
+      return;
+    }
+
+    const activeVehicle = {
+      ...vehicleDraft,
+      placa: normalizePlate(vehicleDraft.placa),
+    };
+
+    const missingActiveVehicleFields = requiredVehicleFields.filter(
+      (field) => !activeVehicle[field].trim(),
+    );
+
+    if (missingActiveVehicleFields.length > 0) {
+      setError("Completa los campos obligatorios del encabezado antes de guardar la inspeccion.");
+      return;
+    }
+
+    if (dailyPlateLocked) {
+      setError(DUPLICATE_DAILY_PLATE_MESSAGE);
+      return;
+    }
+
+    if (!documentExpirations.soat || !documentExpirations.tecnomecanica) {
+      setError("Registra las fechas de vencimiento de SOAT y tecnomecánica para continuar.");
+      return;
+    }
+
+    if (!documentExpirations.licencia || requiresLicenseExpirationUpdate) {
+      setError("Debes registrar la fecha de vencimiento de la licencia del conductor actual.");
       return;
     }
 
@@ -412,25 +610,33 @@ export default function Home() {
         seccion: item.section,
         criticidad: item.critical ? "Critico" : "No critico",
         estado: checklistState[item.id],
+        vencimiento:
+          item.id === "doc_soat"
+            ? documentExpirations.soat
+            : item.id === "doc_tecno"
+              ? documentExpirations.tecnomecanica
+              : item.id === "doc_licencia"
+                ? documentExpirations.licencia
+                : undefined,
       }));
 
       const response = await fetch("/api/inspections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          placa: registeredVehicle.placa,
-          interno: registeredVehicle.interno,
-          tipo: registeredVehicle.tipo,
-          marca: registeredVehicle.marca,
-          linea: registeredVehicle.linea,
-          modelo: registeredVehicle.modelo,
-          kilometraje: registeredVehicle.kilometraje,
-          ruta: registeredVehicle.ruta,
-          conductor: registeredVehicle.conductor,
-          licencia: registeredVehicle.licenciaConduccion,
-          inspector: registeredVehicle.inspector,
-          fecha: registeredVehicle.fechaInspeccion,
-          hora: registeredVehicle.horaInspeccion,
+          placa: activeVehicle.placa,
+          interno: activeVehicle.interno,
+          tipo: activeVehicle.tipo,
+          marca: activeVehicle.marca,
+          linea: activeVehicle.linea,
+          modelo: activeVehicle.modelo,
+          kilometraje: activeVehicle.kilometraje,
+          ruta: activeVehicle.ruta,
+          conductor: activeVehicle.conductor,
+          licencia: activeVehicle.licenciaConduccion,
+          inspector: activeVehicle.inspector,
+          fecha: activeVehicle.fechaInspeccion,
+          hora: activeVehicle.horaInspeccion,
           concepto: conceptoSugerido,
           observaciones,
           checklist,
@@ -438,11 +644,22 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error("No se pudo guardar la inspección");
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        if (response.status === 409) {
+          throw new Error(DUPLICATE_DAILY_PLATE_MESSAGE);
+        }
+
+        throw new Error(payload.error ?? "No se pudo guardar la inspección");
       }
     } catch (error) {
       console.error("Error saving inspection:", error);
-      setError("No fue posible guardar la inspección. Intenta nuevamente.");
+      setError(
+        error instanceof Error && error.message
+          ? error.message
+          : "No fue posible guardar la inspección. Intenta nuevamente.",
+      );
       return;
     }
 
@@ -455,6 +672,9 @@ export default function Home() {
     setRegisteredVehicle(null);
     setChecklistState(initialChecklistState);
     setObservaciones("");
+    setDocumentExpirations(initialDocumentExpirations);
+    setRequiresLicenseExpirationUpdate(false);
+    setDailyPlateLocked(false);
     setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -536,7 +756,11 @@ export default function Home() {
               label="Placa *"
               value={vehicleDraft.placa}
               placeholder="ABC123"
-              onChange={(value) => setVehicleDraft((prev) => ({ ...prev, placa: value }))}
+              onChange={(value) => {
+                setVehicleDraft((prev) => ({ ...prev, placa: value }));
+                setDailyPlateLocked(false);
+              }}
+              onBlur={handlePlateBlur}
             />
             <Field
               isDarkMode={isDarkMode}
@@ -637,6 +861,27 @@ export default function Home() {
               >
                 Registrar encabezado
               </button>
+              {isPrefillingPlate ? (
+                <p className={`text-sm ${isDarkMode ? "text-cyan-300" : "text-blue-700"}`}>
+                  Consultando historial de la placa...
+                </p>
+              ) : null}
+              {plateHint ? (
+                <p className={`text-sm ${isDarkMode ? "text-zinc-300" : "text-slate-600"}`}>
+                  {plateHint}
+                </p>
+              ) : null}
+              {dailyPlateLocked ? (
+                <p
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    isDarkMode
+                      ? "border-rose-700 bg-rose-950/50 text-rose-300"
+                      : "border-rose-300 bg-rose-100 text-rose-800"
+                  }`}
+                >
+                  {DUPLICATE_DAILY_PLATE_MESSAGE}
+                </p>
+              ) : null}
               {registeredVehicle ? (
                 <p
                   className={`rounded-lg border px-3 py-2 text-sm font-medium ${
@@ -675,6 +920,51 @@ export default function Home() {
           </div>
 
           <form className="space-y-4" onSubmit={handleSubmitInspection}>
+            <div
+              className={`rounded-xl border p-4 ${
+                isDarkMode ? "border-zinc-700 bg-zinc-800/50" : "border-blue-200 bg-blue-50/60"
+              }`}
+            >
+              <div className="mb-3">
+                <h3 className={`text-sm font-bold uppercase tracking-[0.18em] ${isDarkMode ? "text-zinc-300" : "text-slate-700"}`}>
+                  Documentacion - Fechas de vencimiento
+                </h3>
+                <p className={`mt-1 text-xs ${isDarkMode ? "text-zinc-500" : "text-slate-500"}`}>
+                  Estas fechas se reutilizan por placa. Solo actualiza la licencia cuando cambie el conductor.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <DateField
+                  isDarkMode={isDarkMode}
+                  label="Vencimiento SOAT *"
+                  value={documentExpirations.soat}
+                  onChange={(value) => setDocumentExpirations((prev) => ({ ...prev, soat: value }))}
+                />
+                <DateField
+                  isDarkMode={isDarkMode}
+                  label="Vencimiento tecnomecanica *"
+                  value={documentExpirations.tecnomecanica}
+                  onChange={(value) => setDocumentExpirations((prev) => ({ ...prev, tecnomecanica: value }))}
+                />
+                <DateField
+                  isDarkMode={isDarkMode}
+                  label={requiresLicenseExpirationUpdate ? "Nueva fecha licencia *" : "Vencimiento licencia *"}
+                  value={documentExpirations.licencia}
+                  onChange={(value) => {
+                    setDocumentExpirations((prev) => ({ ...prev, licencia: value }));
+                    if (value) {
+                      setRequiresLicenseExpirationUpdate(false);
+                    }
+                  }}
+                />
+              </div>
+              {requiresLicenseExpirationUpdate ? (
+                <p className={`mt-2 text-xs font-semibold ${isDarkMode ? "text-amber-300" : "text-amber-700"}`}>
+                  Detectamos cambio de conductor. Debes registrar la nueva fecha de vencimiento de licencia.
+                </p>
+              ) : null}
+            </div>
+
             {Object.entries(groupedChecklist).map(([sectionName, items]) => {
               const criticalIssues = items.filter(
                 (item) => item.critical && checklistState[item.id] === "No cumple",
@@ -750,7 +1040,7 @@ export default function Home() {
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <button
                 type="submit"
-                disabled={!registeredVehicle}
+                disabled={!registeredVehicle || dailyPlateLocked}
                 className={`h-11 w-full rounded-lg px-6 text-sm font-semibold text-white transition sm:w-auto ${
                   isDarkMode
                     ? "bg-cyan-600 hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
@@ -985,10 +1275,11 @@ type FieldProps = {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   placeholder?: string;
 };
 
-function Field({ isDarkMode, label, value, onChange, placeholder }: FieldProps) {
+function Field({ isDarkMode, label, value, onChange, onBlur, placeholder }: FieldProps) {
   return (
     <div className="min-w-0 flex flex-col gap-1">
       <label className={`text-sm font-semibold ${isDarkMode ? "text-zinc-300" : "text-slate-700"}`}>
@@ -997,6 +1288,7 @@ function Field({ isDarkMode, label, value, onChange, placeholder }: FieldProps) 
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
         placeholder={placeholder}
         className={`h-11 rounded-lg border px-3 text-sm outline-none transition ${
           isDarkMode

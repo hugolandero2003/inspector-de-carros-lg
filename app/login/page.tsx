@@ -107,7 +107,7 @@ export default function LoginPage() {
         {/* Footer */}
         <div className="mt-4 border-t border-slate-200 pt-4">
           <p className="text-center text-xs text-slate-600">
-            Sistema de inspecciones vehiculares PESV © 2026
+            desarrollado por HALM ©
           </p>
         </div>
       </div>

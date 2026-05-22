@@ -1,19 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/context/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import {
+  ArrowDownTrayIcon,
+  EyeIcon,
+  MagnifyingGlassIcon,
+  MoonIcon,
+  PencilSquareIcon,
+  SunIcon,
+  TrashIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
 
 type InspectionRecord = {
   id: string;
   vehiculo: {
     placa: string;
+    interno: string;
     marca: string;
     modelo: string;
+    linea: string;
     tipo: string;
+    kilometraje: string;
+    ruta: string;
     conductor: string;
     licenciaConduccion: string;
     inspector: string;
@@ -37,9 +51,13 @@ type InspectionRecord = {
 type ApiInspection = {
   id: string;
   placa: string;
+  interno: string;
   tipo: string;
   marca: string;
+  linea: string;
   modelo: string;
+  kilometraje: string;
+  ruta: string;
   conductor: string;
   licencia: string;
   inspector: string;
@@ -51,13 +69,73 @@ type ApiInspection = {
   createdAt: string;
 };
 
+type VehicleGroup = {
+  placa: string;
+  records: InspectionRecord[];
+  latest: InspectionRecord;
+};
+
+type EditInspectionForm = {
+  placa: string;
+  interno: string;
+  tipo: string;
+  marca: string;
+  linea: string;
+  modelo: string;
+  kilometraje: string;
+  ruta: string;
+  conductor: string;
+  licenciaConduccion: string;
+  inspector: string;
+  fechaInspeccion: string;
+  horaInspeccion: string;
+  conceptoFinal: string;
+  observaciones: string;
+  checklist: InspectionRecord["inspeccion"]["checklist"];
+};
+
+const ITEMS_PER_PAGE = 8;
+
+function normalizePlate(plate: string) {
+  return plate.trim().toUpperCase();
+}
+
+function buildEditForm(record: InspectionRecord): EditInspectionForm {
+  return {
+    placa: record.vehiculo.placa,
+    interno: record.vehiculo.interno,
+    tipo: record.vehiculo.tipo,
+    marca: record.vehiculo.marca,
+    linea: record.vehiculo.linea,
+    modelo: record.vehiculo.modelo,
+    kilometraje: record.vehiculo.kilometraje,
+    ruta: record.vehiculo.ruta,
+    conductor: record.vehiculo.conductor,
+    licenciaConduccion: record.vehiculo.licenciaConduccion,
+    inspector: record.vehiculo.inspector,
+    fechaInspeccion: record.vehiculo.fechaInspeccion,
+    horaInspeccion: record.vehiculo.horaInspeccion,
+    conceptoFinal: record.inspeccion.conceptoFinal,
+    observaciones: record.inspeccion.observaciones,
+    checklist: record.inspeccion.checklist,
+  };
+}
+
 export default function AdminPage() {
   const [records, setRecords] = useState<InspectionRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedPlate, setSelectedPlate] = useState<string | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<InspectionRecord | null>(null);
   const [filterPlaca, setFilterPlaca] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [authenticated, setAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<{ username: string } | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [editingRecord, setEditingRecord] = useState<InspectionRecord | null>(null);
+  const [editForm, setEditForm] = useState<EditInspectionForm | null>(null);
+  const [editError, setEditError] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editDeleting, setEditDeleting] = useState(false);
   const router = useRouter();
   const auth = useAuth();
 
@@ -74,9 +152,13 @@ export default function AdminPage() {
       id: entry.id,
       vehiculo: {
         placa: entry.placa,
+        interno: entry.interno,
         marca: entry.marca,
         modelo: entry.modelo,
+        linea: entry.linea,
         tipo: entry.tipo,
+        kilometraje: entry.kilometraje,
+        ruta: entry.ruta,
         conductor: entry.conductor,
         licenciaConduccion: entry.licencia,
         inspector: entry.inspector,
@@ -91,6 +173,103 @@ export default function AdminPage() {
       },
     };
   };
+
+  const groupedVehicles = useMemo<VehicleGroup[]>(() => {
+    const groups = new Map<string, InspectionRecord[]>();
+
+    records.forEach((record) => {
+      const plate = normalizePlate(record.vehiculo.placa);
+      const current = groups.get(plate) ?? [];
+      current.push(record);
+      groups.set(plate, current);
+    });
+
+    return Array.from(groups.entries())
+      .map(([placa, plateRecords]) => {
+        const sortedRecords = [...plateRecords].sort(
+          (a, b) => new Date(b.inspeccion.fechaRegistro).getTime() - new Date(a.inspeccion.fechaRegistro).getTime(),
+        );
+
+        return {
+          placa,
+          records: sortedRecords,
+          latest: sortedRecords[0],
+        };
+      })
+      .sort(
+        (a, b) => {
+          const byCount = b.records.length - a.records.length;
+          if (byCount !== 0) return byCount;
+
+          return (
+            new Date(b.latest.inspeccion.fechaRegistro).getTime() -
+            new Date(a.latest.inspeccion.fechaRegistro).getTime()
+          );
+        },
+      );
+  }, [records]);
+
+  const filteredGroups = useMemo(() => {
+    const query = filterPlaca.trim().toLowerCase();
+    if (!query) return groupedVehicles;
+    return groupedVehicles.filter((group) => group.placa.toLowerCase().includes(query));
+  }, [filterPlaca, groupedVehicles]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredGroups.length / ITEMS_PER_PAGE));
+
+  const paginatedGroups = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredGroups.slice(start, start + ITEMS_PER_PAGE);
+  }, [currentPage, filteredGroups]);
+
+  const selectedPlateHistory = useMemo(() => {
+    if (!selectedPlate) return [];
+    return records
+      .filter((record) => normalizePlate(record.vehiculo.placa) === normalizePlate(selectedPlate))
+      .sort(
+        (a, b) =>
+          new Date(b.inspeccion.fechaRegistro).getTime() -
+          new Date(a.inspeccion.fechaRegistro).getTime(),
+      );
+  }, [records, selectedPlate]);
+
+  const selectedPlateGroup = useMemo(() => {
+    if (!selectedPlate) return null;
+    return groupedVehicles.find((group) => group.placa === normalizePlate(selectedPlate)) ?? null;
+  }, [groupedVehicles, selectedPlate]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterPlaca]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  useEffect(() => {
+    if (!selectedPlate || selectedPlateHistory.length === 0) {
+      setSelectedRecord(null);
+      return;
+    }
+
+    if (!selectedRecord || !selectedPlateHistory.some((record) => record.id === selectedRecord.id)) {
+      setSelectedRecord(selectedPlateHistory[0]);
+    }
+  }, [selectedPlateHistory, selectedPlate, selectedRecord]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const storedTheme = window.localStorage.getItem("admin-theme");
+    setTheme(storedTheme === "dark" ? "dark" : "light");
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("admin-theme", theme);
+  }, [theme]);
 
   const loadRecords = async (token: string) => {
     try {
@@ -137,36 +316,219 @@ export default function AdminPage() {
     router.push("/login");
   };
 
-  const handleDeleteRecord = async (id: string) => {
+  const handleDeletePlate = async (plate: string) => {
     if (!auth.token) {
       router.push("/login");
       return;
     }
 
-    if (confirm("¿Estás seguro de que quieres eliminar este registro?")) {
+    if (confirm(`¿Estás seguro de que quieres eliminar la placa ${plate} y todos sus registros?`)) {
       try {
-        const response = await fetch(`/api/inspections/${id}`, {
+        const response = await fetch(`/api/inspections/plate/${encodeURIComponent(plate)}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${auth.token}` },
         });
 
         if (!response.ok) {
-          throw new Error("No fue posible eliminar el registro");
+          throw new Error("No fue posible eliminar la placa");
         }
 
-        setRecords((prev) => prev.filter((r) => r.id !== id));
-        setSelectedRecord(null);
+        const normalizedPlate = normalizePlate(plate);
+        setRecords((prev) => prev.filter((item) => normalizePlate(item.vehiculo.placa) !== normalizedPlate));
+
+        if (selectedPlate && normalizePlate(selectedPlate) === normalizedPlate) {
+          setSelectedPlate(null);
+          setSelectedRecord(null);
+        }
+
+        if (editingRecord && normalizePlate(editingRecord.vehiculo.placa) === normalizedPlate) {
+          handleCloseEdit();
+        }
+
+        setFilterPlaca((current) => {
+          if (current.trim() && normalizedPlate.includes(current.trim().toUpperCase())) {
+            return "";
+          }
+          return current;
+        });
       } catch (error) {
         console.error("Error deleting record:", error);
       }
     }
   };
 
+  const handleOpenEdit = (record: InspectionRecord) => {
+    setSelectedPlate(record.vehiculo.placa);
+    setSelectedRecord(record);
+    setEditingRecord(record);
+    setEditForm(buildEditForm(record));
+    setEditError("");
+  };
+
+  const handleCloseEdit = () => {
+    setEditingRecord(null);
+    setEditForm(null);
+    setEditError("");
+    setEditSaving(false);
+    setEditDeleting(false);
+    setSelectedPlate(null);
+    setSelectedRecord(null);
+  };
+
+  const handleDeleteDailyChecklist = async () => {
+    if (!editingRecord || !auth.token) {
+      return;
+    }
+
+    if (!confirm("¿Seguro que quieres eliminar el checklist de este día? Esta acción habilita un nuevo registro para la placa hoy y no elimina el carro ni el usuario.")) {
+      return;
+    }
+
+    setEditDeleting(true);
+    setEditError("");
+
+    try {
+      const response = await fetch(`/api/inspections/${editingRecord.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("No fue posible eliminar el checklist del día");
+      }
+
+      await loadRecords(auth.token);
+      handleCloseEdit();
+    } catch (error) {
+      console.error("Error deleting daily checklist:", error);
+      setEditError("No fue posible eliminar el checklist del día. Intenta nuevamente.");
+      setEditDeleting(false);
+    }
+  };
+
+  const handleDeleteDailyChecklistFromHistory = async (record: InspectionRecord) => {
+    if (!auth.token) {
+      router.push("/login");
+      return;
+    }
+
+    if (!confirm(`¿Seguro que quieres eliminar el checklist del día ${new Date(record.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}? Esta acción no elimina el carro ni el usuario.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/inspections/${record.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("No fue posible eliminar el checklist del día");
+      }
+
+      await loadRecords(auth.token);
+      setSelectedRecord(null);
+    } catch (error) {
+      console.error("Error deleting daily checklist from history:", error);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingRecord || !editForm || !auth.token) {
+      return;
+    }
+
+    const normalizedPlate = normalizePlate(editForm.placa);
+    const requiredFields = [
+      editForm.placa,
+      editForm.interno,
+      editForm.tipo,
+      editForm.marca,
+      editForm.linea,
+      editForm.modelo,
+      editForm.kilometraje,
+      editForm.ruta,
+      editForm.conductor,
+      editForm.licenciaConduccion,
+      editForm.inspector,
+      editForm.fechaInspeccion,
+      editForm.horaInspeccion,
+    ];
+
+    if (requiredFields.some((value) => !value.trim())) {
+      setEditError("Completa todos los campos del encabezado antes de guardar.");
+      return;
+    }
+
+    if (editForm.conceptoFinal === "No apto" && !editForm.observaciones.trim()) {
+      setEditError("Agrega observaciones si el concepto es No apto.");
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError("");
+
+    try {
+      const response = await fetch(`/api/inspections/${editingRecord.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({
+          placa: normalizedPlate,
+          interno: editForm.interno.trim(),
+          tipo: editForm.tipo.trim(),
+          marca: editForm.marca.trim(),
+          linea: editForm.linea.trim(),
+          modelo: editForm.modelo.trim(),
+          kilometraje: editForm.kilometraje.trim(),
+          ruta: editForm.ruta.trim(),
+          conductor: editForm.conductor.trim(),
+          licencia: editForm.licenciaConduccion.trim(),
+          inspector: editForm.inspector.trim(),
+          fecha: editForm.fechaInspeccion.trim(),
+          hora: editForm.horaInspeccion.trim(),
+          concepto: editForm.conceptoFinal,
+          observaciones: editForm.observaciones,
+          checklist: editForm.checklist,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("No fue posible actualizar el registro");
+      }
+
+      await loadRecords(auth.token);
+      handleCloseEdit();
+    } catch (error) {
+      console.error("Error saving edit:", error);
+      setEditError("No fue posible guardar los cambios. Intenta nuevamente.");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   const today = new Date().toLocaleDateString("es-CO", { year: "numeric", month: "long", day: "numeric" });
   const fileName = `Inspecciones_PESV_${new Date().toISOString().split("T")[0]}`;
 
-  const handleExportPDF = () => {
-    if (filteredRecords.length === 0) return;
+  const downloadWorkbook = (wb: XLSX.WorkBook, suffix: string) => {
+    const workbookData = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([workbookData], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${suffix}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const exportPdf = (items: InspectionRecord[], title: string, suffix: string) => {
+    if (items.length === 0) return;
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const pageW = doc.internal.pageSize.getWidth();
 
@@ -176,16 +538,16 @@ export default function AdminPage() {
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text("SISTEMA DE INSPECCIÓN PREOPERACIONAL PESV", pageW / 2, 10, { align: "center" });
+    doc.text(title, pageW / 2, 10, { align: "center" });
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
-    doc.text(`Reporte generado: ${today}   |   Total registros: ${filteredRecords.length}`, pageW / 2, 17, { align: "center" });
+    doc.text(`Reporte generado: ${today}   |   Total registros: ${items.length}`, pageW / 2, 17, { align: "center" });
 
     // Tabla resumen
     autoTable(doc, {
       startY: 28,
       head: [["Placa", "Tipo", "Marca / Modelo", "Conductor", "Lic. Conducción", "Inspector", "Fecha", "Hora", "Concepto", "Observaciones"]],
-      body: filteredRecords.map((r) => [
+      body: items.map((r) => [
         r.vehiculo.placa,
         r.vehiculo.tipo ?? "-",
         `${r.vehiculo.marca} ${r.vehiculo.modelo}`,
@@ -216,14 +578,14 @@ export default function AdminPage() {
     });
 
     // Detalle del checklist por registro
-    filteredRecords.forEach((r, idx) => {
+    items.forEach((r, idx) => {
       doc.addPage();
       doc.setFillColor(15, 23, 42);
       doc.rect(0, 0, pageW, 18, "F");
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text(`INSPECCIÓN DETALLADA — Placa: ${r.vehiculo.placa}  (${idx + 1}/${filteredRecords.length})`, pageW / 2, 8, { align: "center" });
+      doc.text(`INSPECCIÓN DETALLADA — Placa: ${r.vehiculo.placa}  (${idx + 1}/${items.length})`, pageW / 2, 8, { align: "center" });
       doc.setFontSize(8);
       doc.setFont("helvetica", "normal");
       doc.text(`Conductor: ${r.vehiculo.conductor}   Inspector: ${r.vehiculo.inspector}   Fecha: ${r.vehiculo.fechaInspeccion} ${r.vehiculo.horaInspeccion}   Concepto: ${r.inspeccion.conceptoFinal}`, pageW / 2, 14, { align: "center" });
@@ -277,11 +639,11 @@ export default function AdminPage() {
       doc.text(`Sistema PESV — Página ${p} de ${totalPages}`, pageW / 2, doc.internal.pageSize.getHeight() - 4, { align: "center" });
     }
 
-    doc.save(`${fileName}.pdf`);
+    doc.save(`${suffix}.pdf`);
   };
 
-  const handleExportExcel = () => {
-    if (filteredRecords.length === 0) return;
+  const exportExcel = (items: InspectionRecord[], suffix: string) => {
+    if (items.length === 0) return;
 
     const wb = XLSX.utils.book_new();
 
@@ -291,7 +653,7 @@ export default function AdminPage() {
       [`Reporte generado: ${today}`],
       [],
       ["Placa", "Tipo", "Marca", "Modelo", "Conductor", "Lic. Conducción", "Inspector", "Fecha", "Hora", "Concepto", "Observaciones"],
-      ...filteredRecords.map((r) => [
+      ...items.map((r) => [
         r.vehiculo.placa,
         r.vehiculo.tipo ?? "-",
         r.vehiculo.marca,
@@ -311,7 +673,7 @@ export default function AdminPage() {
     XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
 
     // --- Hojas por registro (checklist) ---
-    filteredRecords.forEach((r) => {
+    items.forEach((r) => {
       const sheetName = r.vehiculo.placa.slice(0, 28); // max 31 chars
       const headerRows = [
         [`INSPECCIÓN PREOPERACIONAL — ${r.vehiculo.placa}`],
@@ -338,39 +700,75 @@ export default function AdminPage() {
       XLSX.utils.book_append_sheet(wb, ws, sheetName);
     });
 
-    XLSX.writeFile(wb, `${fileName}.xlsx`);
+    downloadWorkbook(wb, suffix);
   };
 
-  const filteredRecords = records.filter((r) =>
-    r.vehiculo.placa.toLowerCase().includes(filterPlaca.toLowerCase())
-  );
+  const handleExportSelectedPlatePDF = () => {
+    if (selectedPlateHistory.length === 0) return;
+    exportPdf(
+      selectedPlateHistory,
+      `Historial de placa ${selectedPlate}`,
+      `Historial_${selectedPlate}_${new Date().toISOString().split("T")[0]}`,
+    );
+  };
+
+  const handleExportSelectedPlateExcel = () => {
+    if (selectedPlateHistory.length === 0) return;
+    exportExcel(
+      selectedPlateHistory,
+      `Historial_${selectedPlate}_${new Date().toISOString().split("T")[0]}`,
+    );
+  };
+
+  const handleExportPDF = () => {
+    exportPdf(records, "SISTEMA DE INSPECCIÓN PREOPERACIONAL PESV", fileName);
+  };
+
+  const handleExportExcel = () => {
+    exportExcel(records, fileName);
+  };
 
   if (!authenticated) {
     return null;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4 py-6 sm:px-6 sm:py-8">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(37,99,235,0.12),_transparent_35%),linear-gradient(180deg,var(--background),var(--background))] px-4 py-6 text-[var(--foreground)] sm:px-6 sm:py-8">
       <main className="mx-auto w-full max-w-7xl flex flex-col gap-6">
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-white sm:text-4xl">Panel Administrativo</h1>
-            <p className="mt-2 text-sm text-slate-300">
+            <div className="mb-2 inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-xs font-semibold tracking-[0.2em] text-[var(--muted)] shadow-[var(--shadow)] backdrop-blur">
+              CONTROL DE FLOTA
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight text-[var(--foreground)] sm:text-4xl">Panel Administrativo</h1>
+            <p className="mt-2 text-sm text-[var(--muted)]">
               Bienvenido, <strong>{currentUser?.username}</strong>
             </p>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <button
+              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+              className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-sm font-semibold text-[var(--foreground)] shadow-[var(--shadow)] backdrop-blur transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-strong)]"
+            >
+              <span className="inline-flex items-center gap-2">
+                {theme === "dark" ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
+                {theme === "dark" ? "Modo claro" : "Modo oscuro"}
+              </span>
+            </button>
             <button
               onClick={() => router.push("/")}
-              className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/20"
+              className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-sm font-semibold text-[var(--foreground)] shadow-[var(--shadow)] backdrop-blur transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-strong)]"
             >
-              ← Nueva inspección
+              <span className="inline-flex items-center gap-2">
+                <EyeIcon className="h-4 w-4" />
+                Nueva inspección
+              </span>
             </button>
             <button
               onClick={handleLogout}
-              className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20"
+              className="rounded-xl border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/15"
             >
               Cerrar sesión
             </button>
@@ -379,19 +777,19 @@ export default function AdminPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-sm">
-            <p className="text-sm font-semibold text-slate-400">Total de registros</p>
-            <p className="mt-2 text-3xl font-bold text-white">{records.length}</p>
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow)] backdrop-blur-sm">
+            <p className="text-sm font-semibold text-[var(--muted)]">Total de registros</p>
+            <p className="mt-2 text-3xl font-bold text-[var(--foreground)]">{records.length}</p>
           </div>
-          <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-sm">
-            <p className="text-sm font-semibold text-slate-400">Aptos</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-400">
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow)] backdrop-blur-sm">
+            <p className="text-sm font-semibold text-[var(--muted)]">Aptos</p>
+            <p className="mt-2 text-3xl font-bold text-[var(--success)]">
               {records.filter((r) => r.inspeccion.conceptoFinal === "Apto").length}
             </p>
           </div>
-          <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-sm">
-            <p className="text-sm font-semibold text-slate-400">No aptos</p>
-            <p className="mt-2 text-3xl font-bold text-rose-400">
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow)] backdrop-blur-sm">
+            <p className="text-sm font-semibold text-[var(--muted)]">No aptos</p>
+            <p className="mt-2 text-3xl font-bold text-[var(--danger)]">
               {records.filter((r) => r.inspeccion.conceptoFinal === "No apto").length}
             </p>
           </div>
@@ -400,110 +798,135 @@ export default function AdminPage() {
         {/* Filters and Actions */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex-1">
-            <input
-              type="text"
-              placeholder="Buscar por placa..."
-              value={filterPlaca}
-              onChange={(e) => setFilterPlaca(e.target.value)}
-              className="w-full rounded-lg border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm text-white placeholder-slate-500 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30"
-            />
+            <div className="relative">
+              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
+              <input
+                type="text"
+                placeholder="Buscar por placa..."
+                value={filterPlaca}
+                onChange={(e) => setFilterPlaca(e.target.value)}
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] py-2.5 pl-10 pr-4 text-sm text-[var(--foreground)] placeholder:text-[var(--muted)] outline-none shadow-[var(--shadow)] backdrop-blur transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+              />
+            </div>
           </div>
           <div className="flex gap-2">
             <button
-              onClick={handleExportExcel}
-              disabled={filteredRecords.length === 0}
-              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:shadow-lg disabled:cursor-not-allowed disabled:from-slate-600 disabled:to-slate-700"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 11h8v1.5H8V11zm0 3h8v1.5H8V14zm0 3h5v1.5H8V17z"/></svg>
-              Excel
-            </button>
-            <button
               onClick={handleExportPDF}
-              disabled={filteredRecords.length === 0}
-              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-rose-600 to-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:shadow-lg disabled:cursor-not-allowed disabled:from-slate-600 disabled:to-slate-700"
+              disabled={records.length === 0}
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--danger)]/20 bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM7 13h2.5v1H7v-1zm0 2h10v1H7v-1zm0 2h10v1H7v-1z"/></svg>
-              PDF
+              <ArrowDownTrayIcon className="h-4 w-4" />
+              PDF general
             </button>
           </div>
         </div>
 
-        {/* Records Table */}
         {loading ? (
           <div className="text-center py-12">
-            <p className="text-slate-400">Cargando registros...</p>
+            <p className="text-[var(--muted)]">Cargando vehículos...</p>
           </div>
-        ) : filteredRecords.length === 0 ? (
-          <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-8 text-center">
-            <p className="text-slate-400">
-              {records.length === 0 ? "No hay registros guardados aún" : "No se encontraron registros para esa placa"}
+        ) : filteredGroups.length === 0 ? (
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center shadow-[var(--shadow)] backdrop-blur-sm">
+            <p className="text-[var(--muted)]">
+              {records.length === 0 ? "No hay registros guardados aún" : "No se encontraron vehículos para esa placa"}
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-700 bg-slate-800/50 backdrop-blur-sm">
+          <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)] backdrop-blur-sm">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-slate-700 bg-slate-900/50">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Placa
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Vehículo
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Conductor
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Concepto
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Fecha
-                  </th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Acciones
-                  </th>
+                <tr className="border-b border-[var(--border)] bg-[var(--surface-muted)]">
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Placa</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Registros</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Último conductor</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Última fecha</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Concepto</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700">
-                {filteredRecords.map((record) => (
-                  <tr key={record.id} className="transition hover:bg-slate-700/30">
+              <tbody className="divide-y divide-[var(--border)]">
+                {paginatedGroups.map((group) => (
+                  <tr
+                    key={group.placa}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setSelectedPlate(group.placa);
+                      setSelectedRecord(group.latest);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedPlate(group.placa);
+                        setSelectedRecord(group.latest);
+                      }
+                    }}
+                    className="cursor-pointer transition hover:bg-[var(--accent-soft)] focus:bg-[var(--accent-soft)] focus:outline-none"
+                  >
                     <td className="px-4 py-3">
-                      <span className="inline-flex rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-sm font-bold text-cyan-300">
-                        {record.vehiculo.placa}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedPlate(group.placa);
+                          setSelectedRecord(group.latest);
+                        }}
+                        className="inline-flex rounded-full border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-3 py-1 text-sm font-bold text-[var(--accent)] transition hover:bg-[var(--accent)]/15"
+                      >
+                        {group.placa}
+                      </button>
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-300">
-                      {record.vehiculo.marca} {record.vehiculo.modelo}
+                    <td className="px-4 py-3 text-sm text-[var(--foreground)]">{group.records.length}</td>
+                    <td className="px-4 py-3 text-sm text-[var(--foreground)]">{group.latest.vehiculo.conductor}</td>
+                    <td className="px-4 py-3 text-sm text-[var(--muted)]">
+                      {new Date(group.latest.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-300">{record.vehiculo.conductor}</td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${
-                          record.inspeccion.conceptoFinal === "Apto"
-                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                            : record.inspeccion.conceptoFinal === "No apto"
-                              ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
-                              : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                          group.latest.inspeccion.conceptoFinal === "Apto"
+                            ? "border-[var(--success)]/25 bg-[var(--success-soft)] text-[var(--success)]"
+                            : group.latest.inspeccion.conceptoFinal === "No apto"
+                              ? "border-[var(--danger)]/25 bg-[var(--danger-soft)] text-[var(--danger)]"
+                              : "border-[var(--warning)]/25 bg-[var(--warning-soft)] text-[var(--warning)]"
                         }`}
                       >
-                        {record.inspeccion.conceptoFinal}
+                        {group.latest.inspeccion.conceptoFinal}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-400">
-                      {new Date(record.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <button
-                        onClick={() => setSelectedRecord(record)}
-                        className="mr-2 inline-flex rounded border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-xs font-semibold text-blue-300 transition hover:bg-blue-500/20"
+                        type="button"
+                        onClick={() => {
+                          setSelectedPlate(group.placa);
+                          setSelectedRecord(group.latest);
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        className="mr-2 inline-flex items-center gap-1.5 rounded-full border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--accent)] transition hover:bg-[var(--accent)]/15"
                       >
-                        Ver
+                        <EyeIcon className="h-3.5 w-3.5" />
+                        Historial
                       </button>
                       <button
-                        onClick={() => handleDeleteRecord(record.id)}
-                        className="inline-flex rounded border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleOpenEdit(group.latest);
+                        }}
+                        className="mr-2 inline-flex items-center gap-1.5 rounded-full border border-[var(--warning)]/25 bg-[var(--warning-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--warning)] transition hover:bg-[var(--warning)]/15"
                       >
-                        Eliminar
+                        <PencilSquareIcon className="h-3.5 w-3.5" />
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleDeletePlate(group.latest.vehiculo.placa);
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/15"
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                        Eliminar carro
                       </button>
                     </td>
                   </tr>
@@ -513,174 +936,365 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Detail Modal */}
-        {selectedRecord && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-600 bg-slate-800 p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-white">Detalles de la inspección</h2>
+        {!loading && filteredGroups.length > 0 && (
+          <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow)] sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-[var(--muted)]">
+              Registros
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={currentPage === 1}
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Anterior
+              </button>
+              <span className="text-sm font-semibold text-[var(--foreground)]">{currentPage} / {totalPages}</span>
+              <button
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={currentPage === totalPages}
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* History Modal */}
+        {selectedPlate && selectedRecord && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+            <div className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-3xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-[var(--shadow)] sm:p-6">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-bold text-[var(--foreground)]">Historial de la placa {selectedPlate}</h2>
+                  <p className="text-sm text-[var(--muted)]">
+                    {selectedPlateHistory.length} inspecciones registradas
+                    {selectedPlateGroup ? ` · ${selectedPlateGroup.latest.vehiculo.marca} ${selectedPlateGroup.latest.vehiculo.modelo}` : ""}
+                  </p>
+                </div>
                 <button
-                  onClick={() => setSelectedRecord(null)}
-                  className="rounded-lg bg-slate-700 p-2 text-slate-300 transition hover:bg-slate-600 hover:text-white"
+                  onClick={() => {
+                    setSelectedPlate(null);
+                    setSelectedRecord(null);
+                  }}
+                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-2 text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
                 >
                   ✕
                 </button>
               </div>
 
-              <div className="space-y-6">
-                {/* Vehicle Info */}
-                <div>
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Información del vehículo</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <p className="text-xs text-slate-400">Placa</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.placa}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">Tipo</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.tipo}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">Marca</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.marca}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">Modelo</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.modelo}</p>
+              <div className="grid gap-5 lg:grid-cols-[0.95fr_1.2fr]">
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Inspecciones</h3>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleExportSelectedPlatePDF}
+                        className="rounded-xl border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/15"
+                      >
+                        PDF
+                      </button>
+                      <button
+                        onClick={handleExportSelectedPlateExcel}
+                        className="rounded-xl border border-[var(--success)]/25 bg-[var(--success-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--success)] transition hover:bg-[var(--success)]/15"
+                      >
+                        Excel
+                      </button>
                     </div>
                   </div>
-                </div>
-
-                {/* Inspector Info */}
-                <div>
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Información de la inspección</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <p className="text-xs text-slate-400">Inspector</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.inspector}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">Conductor</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.conductor}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">Fecha</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.fechaInspeccion}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">Hora</p>
-                      <p className="text-sm font-semibold text-white">{selectedRecord.vehiculo.horaInspeccion}</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Concept */}
-                <div>
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Concepto</h3>
-                  <p
-                    className={`inline-flex rounded-full border px-4 py-2 text-sm font-bold ${
-                      selectedRecord.inspeccion.conceptoFinal === "Apto"
-                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                        : selectedRecord.inspeccion.conceptoFinal === "No apto"
-                          ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
-                          : "border-amber-500/30 bg-amber-500/10 text-amber-300"
-                    }`}
-                  >
-                    {selectedRecord.inspeccion.conceptoFinal}
-                  </p>
-                </div>
-
-                {/* Observations */}
-                {selectedRecord.inspeccion.observaciones && (
-                  <div>
-                    <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Observaciones</h3>
-                    <div className="rounded-lg border border-slate-600 bg-slate-900/50 p-3">
-                      <p className="whitespace-pre-wrap text-sm text-slate-300">{selectedRecord.inspeccion.observaciones}</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Checklist */}
-                <div>
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Resultados del checklist</h3>
-                  <div className="space-y-2">
-                    {selectedRecord.inspeccion.checklist.map((item) => (
-                      <div key={item.id} className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900/30 p-3 text-sm">
-                        <div>
-                          <p className="text-slate-300">{item.item}</p>
-                          <p className="text-xs text-slate-500">{item.seccion}</p>
-                        </div>
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-                            item.estado === "Cumple"
-                              ? "bg-emerald-500/20 text-emerald-300"
-                              : item.estado === "No cumple"
-                                ? "bg-rose-500/20 text-rose-300"
-                                : "bg-slate-500/20 text-slate-300"
-                          }`}
+                  <div className="space-y-3">
+                    {selectedPlateHistory.map((record) => (
+                      <div
+                        key={record.id}
+                        className={`w-full rounded-xl border p-3 text-left transition ${
+                          selectedRecord.id === record.id
+                            ? "border-[var(--accent)]/35 bg-[var(--accent-soft)]"
+                            : "border-[var(--border)] bg-[var(--surface-muted)] hover:bg-[var(--accent-soft)]"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRecord(record)}
+                          className="w-full text-left"
                         >
-                          {item.estado}
-                        </span>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
+                                {new Date(record.inspeccion.fechaRegistro).toLocaleString("es-CO")}
+                              </p>
+                              <p className="text-xs text-[var(--muted)]">
+                                Conductor: {record.vehiculo.conductor} · Inspector: {record.vehiculo.inspector}
+                              </p>
+                            </div>
+                            <span
+                              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${
+                                record.inspeccion.conceptoFinal === "Apto"
+                                  ? "border-[var(--success)]/25 bg-[var(--success-soft)] text-[var(--success)]"
+                                  : record.inspeccion.conceptoFinal === "No apto"
+                                    ? "border-[var(--danger)]/25 bg-[var(--danger-soft)] text-[var(--danger)]"
+                                    : "border-[var(--warning)]/25 bg-[var(--warning-soft)] text-[var(--warning)]"
+                              }`}
+                            >
+                              {record.inspeccion.conceptoFinal}
+                            </span>
+                          </div>
+                        </button>
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDailyChecklistFromHistory(record)}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/15"
+                          >
+                            <TrashIcon className="h-3.5 w-3.5" />
+                            Eliminar checklist del día
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Close Button */}
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => {
-                      const single = [selectedRecord];
-                      const tmp = filteredRecords;
-                      // exportar solo ese registro en PDF
-                      const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-                      const pageW = doc.internal.pageSize.getWidth();
-                      const r = selectedRecord;
-                      doc.setFillColor(15, 23, 42);
-                      doc.rect(0, 0, pageW, 18, "F");
-                      doc.setTextColor(255, 255, 255);
-                      doc.setFontSize(11);
-                      doc.setFont("helvetica", "bold");
-                      doc.text(`INSPECCIÓN DETALLADA — Placa: ${r.vehiculo.placa}`, pageW / 2, 8, { align: "center" });
-                      doc.setFontSize(8);
-                      doc.setFont("helvetica", "normal");
-                      doc.text(`Conductor: ${r.vehiculo.conductor}   Inspector: ${r.vehiculo.inspector}   Fecha: ${r.vehiculo.fechaInspeccion} ${r.vehiculo.horaInspeccion}   Concepto: ${r.inspeccion.conceptoFinal}`, pageW / 2, 14, { align: "center" });
-                      autoTable(doc, {
-                        startY: 22,
-                        head: [["#", "Sección", "Ítem", "Criticidad", "Estado"]],
-                        body: r.inspeccion.checklist.map((item, i) => [i + 1, item.seccion ?? "-", item.item, item.criticidad, item.estado]),
-                        headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: "bold", fontSize: 8 },
-                        bodyStyles: { fontSize: 7, textColor: [30, 30, 30] },
-                        alternateRowStyles: { fillColor: [241, 245, 249] },
-                        columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 38 }, 3: { cellWidth: 22, halign: "center" }, 4: { cellWidth: 24, halign: "center", fontStyle: "bold" } },
-                        didParseCell(data) {
-                          if (data.column.index === 4 && data.section === "body") {
-                            const val = String(data.cell.raw);
-                            data.cell.styles.textColor = val === "Cumple" ? [5, 150, 105] : val === "No cumple" ? [220, 38, 38] : [100, 116, 139];
-                          }
-                        },
-                        margin: { left: 8, right: 8 },
-                      });
-                      if (r.inspeccion.observaciones) {
-                        const finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
-                        doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor(30, 30, 30);
-                        doc.text("Observaciones:", 8, finalY);
-                        doc.setFont("helvetica", "normal");
-                        doc.text(r.inspeccion.observaciones, 8, finalY + 5, { maxWidth: pageW - 16 });
-                      }
-                      doc.save(`Inspeccion_${r.vehiculo.placa}_${r.vehiculo.fechaInspeccion}.pdf`);
-                      void single; void tmp;
-                    }}
-                    className="flex-1 rounded-lg bg-gradient-to-r from-rose-700 to-red-600 px-4 py-3 text-sm font-semibold text-white transition hover:shadow-lg"
-                  >
-                    Descargar PDF
-                  </button>
-                  <button
-                    onClick={() => setSelectedRecord(null)}
-                    className="flex-1 rounded-lg bg-gradient-to-r from-slate-700 to-slate-600 px-4 py-3 text-sm font-semibold text-white transition hover:shadow-lg"
-                  >
-                    Cerrar
-                  </button>
+                {editingRecord && editForm && (
+                  <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
+                    <div className="flex h-[82vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-[var(--shadow)] sm:p-6">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-2xl font-bold text-[var(--foreground)]">Editar inspección</h2>
+                          <p className="text-sm text-[var(--muted)]">
+                            Placa {editingRecord.vehiculo.placa} · {editingRecord.vehiculo.marca} {editingRecord.vehiculo.modelo}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCloseEdit}
+                          className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-2 text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                        >
+                          <XMarkIcon className="h-5 w-5" />
+                        </button>
+                      </div>
+
+                      {editError && (
+                        <div className="mb-4 rounded-2xl border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]">
+                          {editError}
+                        </div>
+                      )}
+
+                      <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[1.05fr_0.95fr]">
+                        <div className="overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+                          <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Encabezado</h3>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {[
+                              ["placa", "Placa"],
+                              ["interno", "Interno"],
+                              ["tipo", "Tipo"],
+                              ["marca", "Marca"],
+                              ["linea", "Línea"],
+                              ["modelo", "Modelo"],
+                              ["kilometraje", "Kilometraje"],
+                              ["ruta", "Ruta"],
+                              ["conductor", "Conductor"],
+                              ["licenciaConduccion", "Licencia"],
+                              ["inspector", "Inspector"],
+                              ["fechaInspeccion", "Fecha"],
+                              ["horaInspeccion", "Hora"],
+                            ].map(([key, label]) => (
+                              <label key={key} className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">{label}</span>
+                                <input
+                                  value={editForm[key as keyof Omit<EditInspectionForm, "conceptoFinal" | "observaciones" | "checklist">] as string}
+                                  onChange={(event) => setEditForm((current) => current ? { ...current, [key]: event.target.value } : current)}
+                                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+                                />
+                              </label>
+                            ))}
+                          </div>
+
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                            <label className="space-y-1">
+                              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Concepto</span>
+                              <select
+                                value={editForm.conceptoFinal}
+                                onChange={(event) => setEditForm((current) => current ? { ...current, conceptoFinal: event.target.value } : current)}
+                                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+                              >
+                                <option value="Apto">Apto</option>
+                                <option value="Apto con observaciones">Apto con observaciones</option>
+                                <option value="No apto">No apto</option>
+                              </select>
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Observaciones</span>
+                              <textarea
+                                rows={4}
+                                value={editForm.observaciones}
+                                onChange={(event) => setEditForm((current) => current ? { ...current, observaciones: event.target.value } : current)}
+                                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="flex min-h-0 flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+                          <div className="mb-4 flex items-center justify-between gap-3">
+                            <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Checklist</h3>
+                            <span className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-1 text-xs font-semibold text-[var(--muted)]">
+                              {editForm.checklist.length} items
+                            </span>
+                          </div>
+
+                          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                            {editForm.checklist.map((item, index) => (
+                              <div key={item.id} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-muted)] p-3">
+                                <div className="mb-3 flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-[var(--foreground)]">{item.item}</p>
+                                    <p className="text-xs text-[var(--muted)]">{item.seccion}</p>
+                                  </div>
+                                  <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                                    {item.criticidad}
+                                  </span>
+                                </div>
+                                <select
+                                  value={item.estado}
+                                  onChange={(event) => {
+                                    const estado = event.target.value;
+                                    setEditForm((current) => {
+                                      if (!current) return current;
+                                      const nextChecklist = [...current.checklist];
+                                      nextChecklist[index] = { ...nextChecklist[index], estado };
+                                      return { ...current, checklist: nextChecklist };
+                                    });
+                                  }}
+                                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+                                >
+                                  <option value="Cumple">Cumple</option>
+                                  <option value="No cumple">No cumple</option>
+                                  <option value="No aplica">No aplica</option>
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="mt-4 flex shrink-0 flex-col gap-3 sm:flex-row">
+                            <button
+                              type="button"
+                              onClick={handleDeleteDailyChecklist}
+                              disabled={editSaving || editDeleting}
+                              className="flex-1 rounded-xl border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-4 py-3 text-sm font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {editDeleting ? "Eliminando..." : "Eliminar checklist del día"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSaveEdit}
+                              disabled={editSaving || editDeleting}
+                              className="flex-1 rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm font-semibold text-[var(--accent)] transition hover:bg-[var(--accent)]/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {editSaving ? "Guardando..." : "Guardar cambios"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCloseEdit}
+                              disabled={editSaving || editDeleting}
+                              className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-sm font-semibold text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-5 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+                  <div>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Detalle seleccionado</h3>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(selectedRecord)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--warning)]/25 bg-[var(--warning-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--warning)] transition hover:bg-[var(--warning)]/15"
+                      >
+                        <PencilSquareIcon className="h-3.5 w-3.5" />
+                        Editar
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><p className="text-xs text-[var(--muted)]">Placa</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.placa}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Interno</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.interno}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Tipo</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.tipo}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Línea</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.linea}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Marca</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.marca}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Modelo</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.modelo}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Kilometraje</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.kilometraje}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Ruta</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.ruta}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Conductor</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.conductor}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Inspector</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.inspector}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Fecha</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.fechaInspeccion}</p></div>
+                      <div><p className="text-xs text-[var(--muted)]">Hora</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.horaInspeccion}</p></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Concepto</h3>
+                    <p
+                      className={`inline-flex rounded-full border px-4 py-2 text-sm font-bold ${
+                        selectedRecord.inspeccion.conceptoFinal === "Apto"
+                          ? "border-[var(--success)]/25 bg-[var(--success-soft)] text-[var(--success)]"
+                          : selectedRecord.inspeccion.conceptoFinal === "No apto"
+                            ? "border-[var(--danger)]/25 bg-[var(--danger-soft)] text-[var(--danger)]"
+                            : "border-[var(--warning)]/25 bg-[var(--warning-soft)] text-[var(--warning)]"
+                      }`}
+                    >
+                      {selectedRecord.inspeccion.conceptoFinal}
+                    </p>
+                  </div>
+
+                  {selectedRecord.inspeccion.observaciones && (
+                    <div>
+                      <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Observaciones</h3>
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3">
+                        <p className="whitespace-pre-wrap text-sm text-[var(--foreground)]">{selectedRecord.inspeccion.observaciones}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Checklist</h3>
+                    <div className="space-y-2">
+                      {selectedRecord.inspeccion.checklist.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm">
+                          <div>
+                            <p className="text-[var(--foreground)]">{item.item}</p>
+                            <p className="text-xs text-[var(--muted)]">{item.seccion}</p>
+                          </div>
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${item.estado === "Cumple" ? "bg-[var(--success-soft)] text-[var(--success)]" : item.estado === "No cumple" ? "bg-[var(--danger-soft)] text-[var(--danger)]" : "bg-[var(--surface-strong)] text-[var(--muted)]"}`}>
+                            {item.estado}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <button
+                      onClick={() => handleDeletePlate(selectedRecord.vehiculo.placa)}
+                      className="flex-1 rounded-xl border border-[var(--danger)]/25 bg-[var(--danger-soft)] px-4 py-3 text-sm font-semibold text-[var(--danger)] transition hover:bg-[var(--danger)]/15"
+                    >
+                      Eliminar carro
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedPlate(null);
+                        setSelectedRecord(null);
+                      }}
+                      className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-sm font-semibold text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                    >
+                      Cerrar
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
