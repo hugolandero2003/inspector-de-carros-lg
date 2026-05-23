@@ -37,6 +37,28 @@ type DocumentExpirations = {
 
 const DUPLICATE_DAILY_PLATE_MESSAGE = "Esta placa ya tiene inspección registrada.";
 
+function getBogotaTodayString(baseDate = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(baseDate);
+}
+
+function resolveInspectionValidationDate(rawDate: string) {
+  return rawDate.trim() || getBogotaTodayString();
+}
+
+function isDocumentExpired(dateValue: string, referenceDate: string) {
+  if (!dateValue) return false;
+  return dateValue < referenceDate;
+}
+
+function isDocumentationChecklistItem(itemId: string) {
+  return itemId === "doc_soat" || itemId === "doc_tecno" || itemId === "doc_licencia";
+}
+
 const TIPOS_VEHICULO: string[] = [
   "Turbo furgon seco",
   "Turbo furgon refrigerado",
@@ -376,6 +398,23 @@ export default function Home() {
     return LINEAS_POR_MARCA[key] ?? [];
   }, [vehicleDraft.marca]);
 
+  const expiredDocuments = useMemo(() => {
+    const today = getBogotaTodayString();
+    return {
+      soat: isDocumentExpired(documentExpirations.soat, today),
+      tecnomecanica: isDocumentExpired(documentExpirations.tecnomecanica, today),
+      licencia: isDocumentExpired(documentExpirations.licencia, today),
+    };
+  }, [documentExpirations.soat, documentExpirations.tecnomecanica, documentExpirations.licencia]);
+
+  const expiredDocumentLabels = useMemo(() => {
+    const labels: string[] = [];
+    if (expiredDocuments.soat) labels.push("SOAT");
+    if (expiredDocuments.tecnomecanica) labels.push("Tecnomecánica");
+    if (expiredDocuments.licencia) labels.push("Licencia");
+    return labels;
+  }, [expiredDocuments.soat, expiredDocuments.tecnomecanica, expiredDocuments.licencia]);
+
   const findings = useMemo(() => {
     const noCumpleCriticos = checklistItems
       .filter((item) => item.critical && checklistState[item.id] === "No cumple")
@@ -406,12 +445,45 @@ export default function Home() {
     setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
+  const checkPlateLockForDate = async (rawPlate: string, rawDate: string) => {
+    const normalizedPlate = normalizePlate(rawPlate);
+
+    if (!normalizedPlate || normalizedPlate.length < 5) {
+      setDailyPlateLocked(false);
+      return;
+    }
+
+    const targetDate = resolveInspectionValidationDate(rawDate);
+
+    try {
+      const response = await fetch(
+        `/api/inspections/plate/${encodeURIComponent(normalizedPlate)}?date=${encodeURIComponent(targetDate)}`,
+        { cache: "no-store" },
+      );
+
+      if (response.status === 404) {
+        setDailyPlateLocked(false);
+        return;
+      }
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data = (await response.json()) as { alreadyRegisteredForDate?: boolean };
+      setDailyPlateLocked(Boolean(data.alreadyRegisteredForDate));
+    } catch (lookupError) {
+      console.error("Error checking plate lock date:", lookupError);
+    }
+  };
+
   const handlePlateBlur = async () => {
     const normalizedPlate = normalizePlate(vehicleDraft.placa);
+    const targetDate = resolveInspectionValidationDate(vehicleDraft.fechaInspeccion);
     setVehicleDraft((prev) => ({ ...prev, placa: normalizedPlate }));
     setDailyPlateLocked(false);
 
-    if (!normalizedPlate || normalizedPlate.length < 5 || normalizedPlate === lastPrefilledPlate) {
+    if (!normalizedPlate || normalizedPlate.length < 5) {
       return;
     }
 
@@ -419,7 +491,7 @@ export default function Home() {
     setIsPrefillingPlate(true);
 
     try {
-      const response = await fetch(`/api/inspections/plate/${encodeURIComponent(normalizedPlate)}`, {
+      const response = await fetch(`/api/inspections/plate/${encodeURIComponent(normalizedPlate)}?date=${encodeURIComponent(targetDate)}`, {
         cache: "no-store",
       });
 
@@ -460,12 +532,14 @@ export default function Home() {
         fecha: string;
         hora: string;
         checklist: string;
-        alreadyRegisteredToday?: boolean;
+        alreadyRegisteredForDate?: boolean;
       };
 
-      if (data.alreadyRegisteredToday) {
+      if (data.alreadyRegisteredForDate) {
         setDailyPlateLocked(true);
         setPlateHint("");
+      } else {
+        setDailyPlateLocked(false);
       }
 
       const previousDocumentExpirations = extractDocumentExpirationsFromChecklist(data.checklist);
@@ -483,14 +557,14 @@ export default function Home() {
         conductor: data.conductor,
         licenciaConduccion: data.licencia,
         inspector: data.inspector,
-        fechaInspeccion: data.fecha,
-        horaInspeccion: data.hora,
+        fechaInspeccion: prev.fechaInspeccion || data.fecha,
+        horaInspeccion: prev.horaInspeccion || data.hora,
       }));
       setDocumentExpirations(previousDocumentExpirations);
       setRequiresLicenseExpirationUpdate(false);
       setLastPrefilledConductor(data.conductor.trim().toLowerCase());
       setLastPrefilledPlate(normalizedPlate);
-      if (!data.alreadyRegisteredToday) {
+      if (!data.alreadyRegisteredForDate) {
         setPlateHint("Se cargaron datos previos de esta placa. Puedes actualizar kilometraje, ruta, conductor y demás campos.");
       }
     } catch (lookupError) {
@@ -526,6 +600,30 @@ export default function Home() {
 
     setRequiresLicenseExpirationUpdate(false);
   }, [vehicleDraft.conductor, lastPrefilledConductor]);
+
+  useEffect(() => {
+    setChecklistState((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      if (expiredDocuments.soat && next.doc_soat !== "No cumple") {
+        next.doc_soat = "No cumple";
+        changed = true;
+      }
+
+      if (expiredDocuments.tecnomecanica && next.doc_tecno !== "No cumple") {
+        next.doc_tecno = "No cumple";
+        changed = true;
+      }
+
+      if (expiredDocuments.licencia && next.doc_licencia !== "No cumple") {
+        next.doc_licencia = "No cumple";
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [expiredDocuments.soat, expiredDocuments.tecnomecanica, expiredDocuments.licencia]);
 
   const handleNuevoRegistro = () => {
     setVehicleDraft(initialVehicle);
@@ -843,7 +941,10 @@ export default function Home() {
               isDarkMode={isDarkMode}
               label="Fecha de inspeccion *"
               value={vehicleDraft.fechaInspeccion}
-              onChange={(value) => setVehicleDraft((prev) => ({ ...prev, fechaInspeccion: value }))}
+              onChange={(value) => {
+                setVehicleDraft((prev) => ({ ...prev, fechaInspeccion: value }));
+                void checkPlateLockForDate(vehicleDraft.placa, value);
+              }}
             />
             <TimeField
               isDarkMode={isDarkMode}
@@ -963,6 +1064,11 @@ export default function Home() {
                   Detectamos cambio de conductor. Debes registrar la nueva fecha de vencimiento de licencia.
                 </p>
               ) : null}
+              {expiredDocumentLabels.length > 0 ? (
+                <p className={`mt-2 text-xs font-semibold ${isDarkMode ? "text-rose-300" : "text-rose-700"}`}>
+                  Documentación vencida: {expiredDocumentLabels.join(", ")}.
+                </p>
+              ) : null}
             </div>
 
             {Object.entries(groupedChecklist).map(([sectionName, items]) => {
@@ -988,9 +1094,19 @@ export default function Home() {
                   onToggle={() => toggleSection(sectionName)}
                   checklistState={checklistState}
                   disabled={!registeredVehicle}
-                  onItemChange={(id, value) =>
-                    setChecklistState((prev) => ({ ...prev, [id]: value }))
-                  }
+                  onItemChange={(id, value) => {
+                    if (
+                      isDocumentationChecklistItem(id) &&
+                      ((id === "doc_soat" && expiredDocuments.soat) ||
+                        (id === "doc_tecno" && expiredDocuments.tecnomecanica) ||
+                        (id === "doc_licencia" && expiredDocuments.licencia))
+                    ) {
+                      setChecklistState((prev) => ({ ...prev, [id]: "No cumple" }));
+                      return;
+                    }
+
+                    setChecklistState((prev) => ({ ...prev, [id]: value }));
+                  }}
                 />
               );
             })}
@@ -1006,7 +1122,7 @@ export default function Home() {
                   onChange={(event) => setObservaciones(event.target.value)}
                   disabled={!registeredVehicle}
                   placeholder="Registrar hallazgos, acciones correctivas y responsable."
-                  className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition disabled:opacity-50 ${
+                  className={`w-full rounded-lg border px-3 py-2 text-base outline-none transition disabled:opacity-50 sm:text-sm ${
                     isDarkMode
                       ? "border-zinc-600 bg-zinc-800 text-zinc-100 placeholder-zinc-500 ring-cyan-500/30 focus:border-cyan-500 focus:ring"
                       : "border-blue-200 bg-white text-slate-900 placeholder-slate-500 ring-blue-300 focus:border-blue-500 focus:ring"
@@ -1212,7 +1328,7 @@ function ComboField({ isDarkMode, label, value, options, onChange, placeholder }
           onBlur={handleBlur}
           placeholder={placeholder}
           autoComplete="off"
-          className={`h-11 w-full rounded-lg border px-3 pr-9 text-sm outline-none transition ${
+          className={`h-11 w-full rounded-lg border px-3 pr-9 text-base outline-none transition sm:text-sm ${
             isDarkMode
               ? "border-zinc-600 bg-zinc-800 text-zinc-100 placeholder-zinc-500 ring-cyan-500/30 focus:border-cyan-500 focus:ring"
               : "border-blue-200 bg-white text-slate-900 placeholder-slate-500 ring-blue-300 focus:border-blue-500 focus:ring"
@@ -1290,7 +1406,7 @@ function Field({ isDarkMode, label, value, onChange, onBlur, placeholder }: Fiel
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
         placeholder={placeholder}
-        className={`h-11 rounded-lg border px-3 text-sm outline-none transition ${
+        className={`h-11 rounded-lg border px-3 text-base outline-none transition sm:text-sm ${
           isDarkMode
             ? "border-zinc-600 bg-zinc-800 text-zinc-100 placeholder-zinc-500 ring-cyan-500/30 focus:border-cyan-500 focus:ring"
             : "border-blue-200 bg-white text-slate-900 placeholder-slate-500 ring-blue-300 focus:border-blue-500 focus:ring"
@@ -1317,7 +1433,7 @@ function DateField({ isDarkMode, label, value, onChange }: DateFieldProps) {
         type="date"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={`h-11 rounded-lg border px-3 text-sm outline-none transition ${
+        className={`h-11 rounded-lg border px-3 text-base outline-none transition sm:text-sm ${
           isDarkMode
             ? "border-zinc-600 bg-zinc-800 text-zinc-100 ring-cyan-500/30 focus:border-cyan-500 focus:ring"
             : "border-blue-200 bg-white text-slate-900 ring-blue-300 focus:border-blue-500 focus:ring"
@@ -1344,7 +1460,7 @@ function TimeField({ isDarkMode, label, value, onChange }: TimeFieldProps) {
         type="time"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={`h-11 rounded-lg border px-3 text-sm outline-none transition ${
+        className={`h-11 rounded-lg border px-3 text-base outline-none transition sm:text-sm ${
           isDarkMode
             ? "border-zinc-600 bg-zinc-800 text-zinc-100 ring-cyan-500/30 focus:border-cyan-500 focus:ring"
             : "border-blue-200 bg-white text-slate-900 ring-blue-300 focus:border-blue-500 focus:ring"

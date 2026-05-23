@@ -6,21 +6,6 @@ function normalizePlate(plate: string) {
   return plate.toUpperCase().replace(/\s+/g, "").trim();
 }
 
-function getBogotaDayRange(baseDate = new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Bogota",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-
-  const [year, month, day] = formatter.format(baseDate).split("-").map(Number);
-  const startUtc = new Date(Date.UTC(year, month - 1, day, 5, 0, 0, 0));
-  const endUtc = new Date(Date.UTC(year, month - 1, day + 1, 5, 0, 0, 0));
-
-  return { startUtc, endUtc };
-}
-
 export async function GET(req: NextRequest) {
   const payload = getTokenFromRequest(req);
   if (!payload) {
@@ -74,23 +59,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "La placa es obligatoria" }, { status: 400 });
     }
 
-    const { startUtc, endUtc } = getBogotaDayRange();
-    const existingToday = await prisma.inspection.findFirst({
+    const inspectionDate = String(fecha ?? "").trim();
+    if (!inspectionDate) {
+      return NextResponse.json({ error: "La fecha de inspección es obligatoria" }, { status: 400 });
+    }
+
+    const existingForDate = await prisma.inspection.findFirst({
       where: {
         placa: normalizedPlate,
-        createdAt: {
-          gte: startUtc,
-          lt: endUtc,
-        },
+        fecha: inspectionDate,
       },
       select: { id: true },
     });
 
-    if (existingToday) {
+    if (existingForDate) {
       return NextResponse.json(
         {
-          error: `La placa ${normalizedPlate} ya tiene una inspección registrada hoy.`,
-          suggestion: "Puedes revisar el historial en el panel admin o esperar al siguiente día para un nuevo registro.",
+          error: `La placa ${normalizedPlate} ya tiene una inspección registrada para la fecha ${inspectionDate}.`,
         },
         { status: 409 },
       );

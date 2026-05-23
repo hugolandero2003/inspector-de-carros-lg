@@ -5,41 +5,33 @@ function normalizePlate(plate: string) {
   return plate.toUpperCase().replace(/\s+/g, "").trim();
 }
 
-function getBogotaDayRange(baseDate = new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
+function getBogotaDateString(baseDate = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Bogota",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  });
-
-  const [year, month, day] = formatter.format(baseDate).split("-").map(Number);
-  const startUtc = new Date(Date.UTC(year, month - 1, day, 5, 0, 0, 0));
-  const endUtc = new Date(Date.UTC(year, month - 1, day + 1, 5, 0, 0, 0));
-
-  return { startUtc, endUtc };
+  }).format(baseDate);
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ placa: string }> }
 ) {
   const { placa } = await params;
   const normalizedPlate = normalizePlate(decodeURIComponent(placa));
+  const requestedDate = req.nextUrl.searchParams.get("date")?.trim() || "";
+  const targetDate = requestedDate || getBogotaDateString();
 
   if (!normalizedPlate) {
     return NextResponse.json({ error: "Placa invalida" }, { status: 400 });
   }
 
   try {
-    const { startUtc, endUtc } = getBogotaDayRange();
-    const todayInspection = await prisma.inspection.findFirst({
+    const inspectionForDate = await prisma.inspection.findFirst({
       where: {
         placa: normalizedPlate,
-        createdAt: {
-          gte: startUtc,
-          lt: endUtc,
-        },
+        fecha: targetDate,
       },
       select: {
         id: true,
@@ -73,7 +65,8 @@ export async function GET(
 
     return NextResponse.json({
       ...latestInspection,
-      alreadyRegisteredToday: Boolean(todayInspection),
+      alreadyRegisteredForDate: Boolean(inspectionForDate),
+      validationDate: targetDate,
     });
   } catch (err) {
     console.error("GET inspection by plate error:", err);
