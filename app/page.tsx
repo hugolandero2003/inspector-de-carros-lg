@@ -2,6 +2,7 @@
 
 import { FormEvent, useRef, useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { toBlob } from "html-to-image";
 
 type VehicleRegistration = {
   placa: string;
@@ -36,6 +37,82 @@ type DocumentExpirations = {
 };
 
 const DUPLICATE_DAILY_PLATE_MESSAGE = "Esta placa ya tiene inspección registrada.";
+
+function buildInspectionSuccessShareMessage(payload: {
+  placa: string;
+  fecha: string;
+  hora: string;
+  concepto: Concepto;
+  noCumpleCriticos: string[];
+  inspector: string;
+}) {
+  const criticalFindings =
+    payload.noCumpleCriticos.length > 0
+      ? payload.noCumpleCriticos.join(", ")
+      : "Sin hallazgos críticos";
+
+  return [
+    "✅ Registro diario creado con éxito",
+    "",
+    `Placa: ${payload.placa}`,
+    `Fecha: ${payload.fecha}`,
+    `Hora: ${payload.hora}`,
+    `Concepto: ${payload.concepto}`,
+    `Hallazgos críticos: ${criticalFindings}`,
+    `Inspector: ${payload.inspector}`,
+  ].join("\n");
+}
+
+async function shareInspectionSuccessCardAsImage(cardElement: HTMLDivElement, fallbackMessage: string) {
+  const imageBlob = await toBlob(cardElement, {
+    pixelRatio: 1,
+    canvasWidth: 1080,
+    canvasHeight: 1920,
+    cacheBust: true,
+  });
+
+  if (!imageBlob) {
+    throw new Error("No fue posible generar la imagen del registro.");
+  }
+
+  const shareFile = new File([imageBlob], "registro-exitoso-inspeccion.png", {
+    type: "image/png",
+  });
+
+  const canShareFile =
+    typeof navigator !== "undefined" &&
+    "share" in navigator &&
+    "canShare" in navigator &&
+    navigator.canShare({ files: [shareFile] });
+
+  if (canShareFile) {
+    await navigator.share({
+      title: "Registro diario creado con éxito",
+      text: "Inspección registrada.",
+      files: [shareFile],
+    });
+    return "shared" as const;
+  }
+
+  // Fallback: descarga la imagen y abre WhatsApp con un mensaje breve.
+  const imageUrl = URL.createObjectURL(imageBlob);
+  const link = document.createElement("a");
+  link.href = imageUrl;
+  link.download = "registro-exitoso-inspeccion.png";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(imageUrl);
+
+  window.open(`https://wa.me/?text=${encodeURIComponent(fallbackMessage)}`, "_blank", "noopener,noreferrer");
+  return "downloaded" as const;
+}
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
 
 function getBogotaTodayString(baseDate = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -365,6 +442,7 @@ const initialChecklistState: Record<string, Compliance> = checklistItems.reduce(
 
 export default function Home() {
   const router = useRouter();
+  const successShareCaptureRef = useRef<HTMLDivElement>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [vehicleDraft, setVehicleDraft] = useState<VehicleRegistration>(initialVehicle);
   const [registeredVehicle, setRegisteredVehicle] = useState<VehicleRegistration | null>(null);
@@ -386,7 +464,10 @@ export default function Home() {
   const [successModal, setSuccessModal] = useState<{
     concepto: Concepto;
     noCumpleCriticos: string[];
+    shareMessage: string;
   } | null>(null);
+  const [isSharingSuccessImage, setIsSharingSuccessImage] = useState(false);
+  const [successShareStatus, setSuccessShareStatus] = useState("");
 
   const missingVehicleFields = useMemo(
     () => requiredVehicleFields.filter((field) => !vehicleDraft[field].trim()),
@@ -639,6 +720,7 @@ export default function Home() {
     setRequiresLicenseExpirationUpdate(false);
     setDailyPlateLocked(false);
     setSuccessModal(null);
+    setSuccessShareStatus("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -646,6 +728,7 @@ export default function Home() {
     event.preventDefault();
     setError("");
     setSuccessModal(null);
+    setSuccessShareStatus("");
 
     if (missingVehicleFields.length > 0) {
       setError("Completa los campos obligatorios del encabezado para registrar el vehiculo.");
@@ -764,7 +847,16 @@ export default function Home() {
     setSuccessModal({
       concepto: conceptoSugerido,
       noCumpleCriticos: findings.noCumpleCriticos,
+      shareMessage: buildInspectionSuccessShareMessage({
+        placa: activeVehicle.placa,
+        fecha: activeVehicle.fechaInspeccion,
+        hora: activeVehicle.horaInspeccion,
+        concepto: conceptoSugerido,
+        noCumpleCriticos: findings.noCumpleCriticos,
+        inspector: activeVehicle.inspector,
+      }),
     });
+    setSuccessShareStatus("");
     // Limpiar todo el formulario
     setVehicleDraft(initialVehicle);
     setRegisteredVehicle(null);
@@ -1197,57 +1289,207 @@ export default function Home() {
         </section>
 
         {successModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-sm rounded-2xl border bg-white p-6 shadow-2xl dark:bg-zinc-900">
-              {/* Icono */}
-              <div className="mb-4 flex justify-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-                  <svg className="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+          <>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-sm rounded-2xl border bg-white p-6 shadow-2xl dark:bg-zinc-900">
+                {/* Icono */}
+                <div className="mb-4 flex justify-center">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
+                    <svg className="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
                 </div>
-              </div>
 
-              {/* Texto */}
-              <h2 className="text-center text-xl font-bold text-slate-900">¡Registro creado con éxito!</h2>
-              <p className="mt-2 text-center text-sm text-slate-500">
-                La inspección fue guardada correctamente.
-              </p>
+                {/* Texto */}
+                <h2 className="text-center text-xl font-bold text-slate-900">¡Registro creado con éxito!</h2>
+                <p className="mt-2 text-center text-sm text-slate-500">
+                  La inspección fue guardada correctamente.
+                </p>
 
-              {/* Concepto */}
-              <div className="mt-4 flex justify-center">
-                <span
-                  className={`rounded-full border px-4 py-1.5 text-sm font-bold ${
-                    successModal.concepto === "Apto"
-                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                      : successModal.concepto === "No apto"
-                        ? "border-rose-300 bg-rose-50 text-rose-700"
-                        : "border-amber-300 bg-amber-50 text-amber-700"
-                  }`}
-                >
-                  {successModal.concepto}
-                </span>
-              </div>
-
-              {/* Hallazgos críticos */}
-              {successModal.noCumpleCriticos.length > 0 && (
-                <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3">
-                  <p className="text-xs font-bold text-rose-700">Hallazgos críticos:</p>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-rose-600">
-                    {successModal.noCumpleCriticos.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
+                {/* Concepto */}
+                <div className="mt-4 flex justify-center">
+                  <span
+                    className={`rounded-full border px-4 py-1.5 text-sm font-bold ${
+                      successModal.concepto === "Apto"
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                        : successModal.concepto === "No apto"
+                          ? "border-rose-300 bg-rose-50 text-rose-700"
+                          : "border-amber-300 bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {successModal.concepto}
+                  </span>
                 </div>
-              )}
+
+                {/* Hallazgos críticos */}
+                {successModal.noCumpleCriticos.length > 0 && (
+                  <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3">
+                    <p className="text-xs font-bold text-rose-700">Hallazgos críticos:</p>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-rose-600">
+                      {successModal.noCumpleCriticos.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+              <button
+                type="button"
+                disabled={isSharingSuccessImage}
+                onClick={async () => {
+                  if (!successShareCaptureRef.current) {
+                    setSuccessShareStatus("No se encontró la tarjeta para generar la imagen.");
+                    return;
+                  }
+
+                  try {
+                    setIsSharingSuccessImage(true);
+                    setSuccessShareStatus("");
+                    await waitForNextPaint();
+                    await waitForNextPaint();
+
+                    const result = await shareInspectionSuccessCardAsImage(
+                      successShareCaptureRef.current,
+                      successModal.shareMessage,
+                    );
+
+                    if (result === "shared") {
+                      setSuccessShareStatus("Imagen compartida correctamente.");
+                    } else {
+                      setSuccessShareStatus("Imagen descargada. Adjunta el archivo en WhatsApp si no se abrió el selector de apps.");
+                    }
+                  } catch (shareError) {
+                    console.error("Error sharing success card image:", shareError);
+                    setSuccessShareStatus("No fue posible compartir la imagen en este dispositivo.");
+                  } finally {
+                    setIsSharingSuccessImage(false);
+                  }
+                }}
+                className="mt-4 w-full rounded-xl bg-green-600 py-3 text-sm font-bold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-green-300"
+              >
+                Compartir registro
+              </button>
+
+              {successShareStatus ? (
+                <p className="mt-2 text-center text-xs font-medium text-slate-500">{successShareStatus}</p>
+              ) : null}
 
               {/* Botón cerrar */}
               <button
+                type="button"
                 onClick={() => setSuccessModal(null)}
                 className="mt-6 w-full rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white transition hover:bg-emerald-700"
               >
                 Aceptar
               </button>
+            </div>
+            </div>
+
+            <div className="pointer-events-none fixed -left-[10000px] top-0 opacity-0" aria-hidden="true">
+              <div
+                ref={successShareCaptureRef}
+                style={{
+                  width: "1080px",
+                  height: "1920px",
+                  background: "linear-gradient(180deg, #dbeafe 0%, #eff6ff 38%, #ffffff 100%)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "96px",
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  style={{
+                    width: "760px",
+                    background: "#ffffff",
+                    borderRadius: "28px",
+                    border: "1px solid #cbd5e1",
+                    boxShadow: "0 26px 80px rgba(15, 23, 42, 0.18)",
+                    padding: "48px",
+                    fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+                    color: "#0f172a",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
+                    <div
+                      style={{
+                        height: "84px",
+                        width: "84px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "9999px",
+                        background: "#dcfce7",
+                        color: "#16a34a",
+                        fontSize: "42px",
+                        fontWeight: 800,
+                      }}
+                    >
+                      ✓
+                    </div>
+                  </div>
+
+                  <h2 style={{ margin: 0, textAlign: "center", fontSize: "46px", lineHeight: 1.15, fontWeight: 800 }}>
+                    Registro creado con éxito
+                  </h2>
+                  <p style={{ marginTop: "14px", marginBottom: 0, textAlign: "center", fontSize: "28px", color: "#475569" }}>
+                    La inspección fue guardada correctamente.
+                  </p>
+
+                  <div style={{ marginTop: "30px", display: "flex", justifyContent: "center" }}>
+                    <span
+                      style={{
+                        borderRadius: "9999px",
+                        border: "1px solid #a7f3d0",
+                        background: "#ecfdf5",
+                        color: "#047857",
+                        padding: "10px 22px",
+                        fontSize: "28px",
+                        fontWeight: 800,
+                      }}
+                    >
+                      {successModal.concepto}
+                    </span>
+                  </div>
+
+                  {successModal.noCumpleCriticos.length > 0 ? (
+                    <div
+                      style={{
+                        marginTop: "28px",
+                        borderRadius: "16px",
+                        border: "1px solid #fecaca",
+                        background: "#fff1f2",
+                        padding: "18px",
+                      }}
+                    >
+                      <p style={{ margin: 0, fontSize: "24px", fontWeight: 800, color: "#be123c" }}>
+                        Hallazgos críticos:
+                      </p>
+                      <ul style={{ marginTop: "10px", marginBottom: 0, paddingLeft: "28px", color: "#be123c" }}>
+                        {successModal.noCumpleCriticos.map((item) => (
+                          <li key={item} style={{ fontSize: "22px", marginBottom: "6px" }}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {isSharingSuccessImage && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-2xl border bg-white p-6 shadow-2xl dark:bg-zinc-900">
+              <div className="mb-4 flex justify-center">
+                <div className="h-14 w-14 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-600" />
+              </div>
+              <h2 className="text-center text-xl font-bold text-slate-900">Preparando imagen</h2>
+              <p className="mt-2 text-center text-sm text-slate-500">
+                Estamos generando tu registro para compartir.
+              </p>
             </div>
           </div>
         )}
