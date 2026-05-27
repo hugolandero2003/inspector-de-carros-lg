@@ -100,6 +100,25 @@ function normalizePlate(plate: string) {
   return plate.trim().toUpperCase();
 }
 
+function getRecordTimestamp(record: InspectionRecord) {
+  const timestamp = new Date(record.inspeccion.fechaRegistro).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function isSameDay(dateValue: string, referenceDate: Date) {
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  return (
+    date.getFullYear() === referenceDate.getFullYear() &&
+    date.getMonth() === referenceDate.getMonth() &&
+    date.getDate() === referenceDate.getDate()
+  );
+}
+
 function buildEditForm(record: InspectionRecord): EditInspectionForm {
   return {
     placa: record.vehiculo.placa,
@@ -137,6 +156,10 @@ export default function AdminPage() {
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editDeleting, setEditDeleting] = useState(false);
+  const [listSortOrder, setListSortOrder] = useState<"newest" | "oldest">("newest");
+  const [now, setNow] = useState(() => new Date());
+  const [showPdfDateModal, setShowPdfDateModal] = useState(false);
+  const [selectedExportDate, setSelectedExportDate] = useState(() => new Date().toISOString().split("T")[0]);
   const router = useRouter();
   const auth = useAuth();
 
@@ -188,7 +211,7 @@ export default function AdminPage() {
     return Array.from(groups.entries())
       .map(([placa, plateRecords]) => {
         const sortedRecords = [...plateRecords].sort(
-          (a, b) => new Date(b.inspeccion.fechaRegistro).getTime() - new Date(a.inspeccion.fechaRegistro).getTime(),
+          (a, b) => getRecordTimestamp(b) - getRecordTimestamp(a),
         );
 
         return {
@@ -197,18 +220,11 @@ export default function AdminPage() {
           latest: sortedRecords[0],
         };
       })
-      .sort(
-        (a, b) => {
-          const byCount = b.records.length - a.records.length;
-          if (byCount !== 0) return byCount;
-
-          return (
-            new Date(b.latest.inspeccion.fechaRegistro).getTime() -
-            new Date(a.latest.inspeccion.fechaRegistro).getTime()
-          );
-        },
-      );
-  }, [records]);
+      .sort((a, b) => {
+        const newestDiff = getRecordTimestamp(b.latest) - getRecordTimestamp(a.latest);
+        return listSortOrder === "newest" ? newestDiff : -newestDiff;
+      });
+  }, [records, listSortOrder]);
 
   const filteredGroups = useMemo(() => {
     const query = filterPlaca.trim().toLowerCase();
@@ -241,7 +257,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterPlaca]);
+  }, [filterPlaca, listSortOrder]);
 
   useEffect(() => {
     setCurrentPage((page) => Math.min(page, totalPages));
@@ -271,6 +287,32 @@ export default function AdminPage() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("admin-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(new Date());
+    }, 60000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  const recordsCreatedToday = useMemo(
+    () => records.filter((record) => isSameDay(record.inspeccion.fechaRegistro, now)),
+    [records, now],
+  );
+
+  const recordsForSelectedExportDate = useMemo(() => {
+    const [year, month, day] = selectedExportDate.split("-").map(Number);
+
+    if (!year || !month || !day) {
+      return [];
+    }
+
+    const selectedDate = new Date(year, month - 1, day, 12, 0, 0);
+    return records.filter((record) => isSameDay(record.inspeccion.fechaRegistro, selectedDate));
+  }, [records, selectedExportDate]);
 
   const loadRecords = async (token: string) => {
     try {
@@ -528,7 +570,7 @@ export default function AdminPage() {
     window.URL.revokeObjectURL(url);
   };
 
-  const exportPdf = (items: InspectionRecord[], title: string, suffix: string) => {
+  const exportPdf = (items: InspectionRecord[], title: string, suffix: string, includeDetails = true) => {
     if (items.length === 0) return;
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const pageW = doc.internal.pageSize.getWidth();
@@ -578,58 +620,60 @@ export default function AdminPage() {
       margin: { left: 8, right: 8 },
     });
 
-    // Detalle del checklist por registro
-    items.forEach((r, idx) => {
-      doc.addPage();
-      doc.setFillColor(15, 23, 42);
-      doc.rect(0, 0, pageW, 18, "F");
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "bold");
-      doc.text(`INSPECCIÓN DETALLADA — Placa: ${r.vehiculo.placa}  (${idx + 1}/${items.length})`, pageW / 2, 8, { align: "center" });
-      doc.setFontSize(8);
-      doc.setFont("helvetica", "normal");
-      doc.text(`Conductor: ${r.vehiculo.conductor}   Inspector: ${r.vehiculo.inspector}   Fecha: ${r.vehiculo.fechaInspeccion} ${r.vehiculo.horaInspeccion}   Concepto: ${r.inspeccion.conceptoFinal}`, pageW / 2, 14, { align: "center" });
-
-      autoTable(doc, {
-        startY: 22,
-        head: [["#", "Sección", "Ítem", "Criticidad", "Estado"]],
-        body: r.inspeccion.checklist.map((item, i) => [
-          i + 1,
-          item.seccion ?? "-",
-          item.item,
-          item.criticidad,
-          item.estado,
-        ]),
-        headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: "bold", fontSize: 8 },
-        bodyStyles: { fontSize: 7, textColor: [30, 30, 30] },
-        alternateRowStyles: { fillColor: [241, 245, 249] },
-        columnStyles: {
-          0: { cellWidth: 8 },
-          1: { cellWidth: 38 },
-          3: { cellWidth: 22, halign: "center" },
-          4: { cellWidth: 24, halign: "center", fontStyle: "bold" },
-        },
-        didParseCell(data) {
-          if (data.column.index === 4 && data.section === "body") {
-            const val = String(data.cell.raw);
-            data.cell.styles.textColor =
-              val === "Cumple" ? [5, 150, 105] : val === "No cumple" ? [220, 38, 38] : [100, 116, 139];
-          }
-        },
-        margin: { left: 8, right: 8 },
-      });
-
-      if (r.inspeccion.observaciones) {
-        const finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
-        doc.setFontSize(8);
+    if (includeDetails) {
+      // Detalle del checklist por registro
+      items.forEach((r, idx) => {
+        doc.addPage();
+        doc.setFillColor(15, 23, 42);
+        doc.rect(0, 0, pageW, 18, "F");
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(11);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(30, 30, 30);
-        doc.text("Observaciones:", 8, finalY);
+        doc.text(`INSPECCIÓN DETALLADA — Placa: ${r.vehiculo.placa}  (${idx + 1}/${items.length})`, pageW / 2, 8, { align: "center" });
+        doc.setFontSize(8);
         doc.setFont("helvetica", "normal");
-        doc.text(r.inspeccion.observaciones, 8, finalY + 5, { maxWidth: pageW - 16 });
-      }
-    });
+        doc.text(`Conductor: ${r.vehiculo.conductor}   Inspector: ${r.vehiculo.inspector}   Fecha: ${r.vehiculo.fechaInspeccion} ${r.vehiculo.horaInspeccion}   Concepto: ${r.inspeccion.conceptoFinal}`, pageW / 2, 14, { align: "center" });
+
+        autoTable(doc, {
+          startY: 22,
+          head: [["#", "Sección", "Ítem", "Criticidad", "Estado"]],
+          body: r.inspeccion.checklist.map((item, i) => [
+            i + 1,
+            item.seccion ?? "-",
+            item.item,
+            item.criticidad,
+            item.estado,
+          ]),
+          headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: "bold", fontSize: 8 },
+          bodyStyles: { fontSize: 7, textColor: [30, 30, 30] },
+          alternateRowStyles: { fillColor: [241, 245, 249] },
+          columnStyles: {
+            0: { cellWidth: 8 },
+            1: { cellWidth: 38 },
+            3: { cellWidth: 22, halign: "center" },
+            4: { cellWidth: 24, halign: "center", fontStyle: "bold" },
+          },
+          didParseCell(data) {
+            if (data.column.index === 4 && data.section === "body") {
+              const val = String(data.cell.raw);
+              data.cell.styles.textColor =
+                val === "Cumple" ? [5, 150, 105] : val === "No cumple" ? [220, 38, 38] : [100, 116, 139];
+            }
+          },
+          margin: { left: 8, right: 8 },
+        });
+
+        if (r.inspeccion.observaciones) {
+          const finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(30, 30, 30);
+          doc.text("Observaciones:", 8, finalY);
+          doc.setFont("helvetica", "normal");
+          doc.text(r.inspeccion.observaciones, 8, finalY + 5, { maxWidth: pageW - 16 });
+        }
+      });
+    }
 
     // Pie de página en todas las páginas
     const totalPages = doc.getNumberOfPages();
@@ -725,6 +769,30 @@ export default function AdminPage() {
     exportPdf(records, "SISTEMA DE INSPECCIÓN PREOPERACIONAL PESV", fileName);
   };
 
+  const handleOpenExportDateModal = () => {
+    setSelectedExportDate(new Date().toISOString().split("T")[0]);
+    setShowPdfDateModal(true);
+  };
+
+  const handleExportPDFBySelectedDate = (includeDetails: boolean) => {
+    if (recordsForSelectedExportDate.length === 0) return;
+
+    const [year, month, day] = selectedExportDate.split("-").map(Number);
+    const selectedDate = new Date(year, month - 1, day, 12, 0, 0);
+    const readableDate = selectedDate.toLocaleDateString("es-CO");
+
+    exportPdf(
+      recordsForSelectedExportDate,
+      `SISTEMA DE INSPECCIÓN PREOPERACIONAL PESV - REGISTROS DEL DÍA (${readableDate})`,
+      includeDetails
+        ? `${fileName}_Registros_${selectedExportDate}_Detallado`
+        : `${fileName}_Registros_${selectedExportDate}_Resumen`,
+      includeDetails,
+    );
+
+    setShowPdfDateModal(false);
+  };
+
   const handleExportExcel = () => {
     exportExcel(records, fileName);
   };
@@ -777,7 +845,7 @@ export default function AdminPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow)] backdrop-blur-sm">
             <p className="text-sm font-semibold text-[var(--muted)]">Total de registros</p>
             <p className="mt-2 text-3xl font-bold text-[var(--foreground)]">{records.length}</p>
@@ -794,11 +862,17 @@ export default function AdminPage() {
               {records.filter((r) => r.inspeccion.conceptoFinal === "No apto").length}
             </p>
           </div>
+          <div className="rounded-2xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] p-4 shadow-[var(--shadow)] backdrop-blur-sm">
+            <p className="text-sm font-semibold text-[var(--muted)]">Registros creados en el día</p>
+            <p className="mt-2 text-3xl font-bold text-[var(--accent)]">{recordsCreatedToday.length}</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">{now.toLocaleDateString("es-CO")}</p>
+          </div>
         </div>
 
         {/* Filters and Actions */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex-1">
+        <div className="flex flex-col gap-4 sm:gap-3">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex-1">
             <div className="relative">
               <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
               <input
@@ -809,18 +883,121 @@ export default function AdminPage() {
                 className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] py-2.5 pl-10 pr-4 text-sm text-[var(--foreground)] placeholder:text-[var(--muted)] outline-none shadow-[var(--shadow)] backdrop-blur transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
               />
             </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={handleExportPDF}
+                disabled={records.length === 0}
+                className="flex items-center gap-1.5 rounded-xl border border-[var(--danger)]/20 bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                PDF general
+              </button>
+              <button
+                onClick={handleOpenExportDateModal}
+                disabled={records.length === 0}
+                className="flex items-center gap-1.5 rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--accent)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                PDF del día
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleExportPDF}
-              disabled={records.length === 0}
-              className="flex items-center gap-1.5 rounded-xl border border-[var(--danger)]/20 bg-[var(--danger-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <ArrowDownTrayIcon className="h-4 w-4" />
-              PDF general
-            </button>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Organizar lista por fecha y hora de creación</p>
+            <div className="inline-flex w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow)] sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setListSortOrder("newest")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  listSortOrder === "newest"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "text-[var(--muted)] hover:bg-[var(--surface-muted)]"
+                }`}
+              >
+                Registros recientes
+              </button>
+              <button
+                type="button"
+                onClick={() => setListSortOrder("oldest")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  listSortOrder === "oldest"
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "text-[var(--muted)] hover:bg-[var(--surface-muted)]"
+                }`}
+              >
+                Registros anteriores
+              </button>
+            </div>
           </div>
         </div>
+
+        {showPdfDateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-[var(--shadow)] sm:p-6">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-[var(--foreground)]">Descargar PDF por fecha</h2>
+                  <p className="text-sm text-[var(--muted)]">Selecciona el día del que quieres descargar reportes.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPdfDateModal(false)}
+                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-2 text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <label className="block space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Fecha</span>
+                  <input
+                    type="date"
+                    value={selectedExportDate}
+                    onChange={(event) => setSelectedExportDate(event.target.value)}
+                    className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+                  />
+                </label>
+
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 text-sm text-[var(--muted)]">
+                  Registros encontrados para la fecha: <strong className="text-[var(--foreground)]">{recordsForSelectedExportDate.length}</strong>
+                </div>
+
+                <p className="text-xs text-[var(--muted)]">
+                  Recomendado para compartir: usa PDF resumen (sin checklist ni observaciones). PDF detallado incluye toda la información del reporte.
+                </p>
+
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => handleExportPDFBySelectedDate(false)}
+                    disabled={recordsForSelectedExportDate.length === 0}
+                    className="flex-1 rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--accent)] transition hover:bg-[var(--accent)]/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    PDF resumen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportPDFBySelectedDate(true)}
+                    disabled={recordsForSelectedExportDate.length === 0}
+                    className="flex-1 rounded-xl border border-[var(--warning)]/25 bg-[var(--warning-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--warning)] transition hover:bg-[var(--warning)]/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    PDF detallado
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPdfDateModal(false)}
+                    className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2.5 text-sm font-semibold text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading ? (
           <div className="text-center py-12">
@@ -889,7 +1066,7 @@ export default function AdminPage() {
                       <span className="inline-flex rounded-full border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-3 py-1 text-sm font-bold text-[var(--accent)]">
                         {group.placa}
                       </span>
-                      <span className="text-xs font-semibold text-[var(--muted)]">{group.records.length} registros</span>
+                      <span className="text-xs font-semibold text-[var(--muted)]">{new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}</span>
                     </div>
 
                     {mobileListMode === "detailed" ? (
@@ -899,16 +1076,12 @@ export default function AdminPage() {
                           <p className="font-semibold text-[var(--foreground)]">{group.latest.vehiculo.conductor}</p>
                         </div>
                         <div>
-                          <p className="text-xs text-[var(--muted)]">Última fecha</p>
-                          <p className="font-semibold text-[var(--foreground)]">
-                            {new Date(group.latest.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}
-                          </p>
+                          <p className="text-xs text-[var(--muted)]">Registro creado</p>
+                          <p className="font-semibold text-[var(--foreground)]">{new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}</p>
                         </div>
                       </div>
                     ) : (
-                      <p className="mt-2 text-xs text-[var(--muted)]">
-                        {group.latest.vehiculo.conductor} · {new Date(group.latest.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}
-                      </p>
+                      <p className="mt-2 text-xs text-[var(--muted)]">{group.latest.vehiculo.conductor} · {new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}</p>
                     )}
 
                     <div className={mobileListMode === "compact" ? "mt-2" : "mt-3"}>
@@ -970,9 +1143,9 @@ export default function AdminPage() {
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--surface-muted)]">
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Placa</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Registros</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Creado</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Último conductor</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Última fecha</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Fecha y hora</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Concepto</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Acciones</th>
                 </tr>
@@ -1008,10 +1181,10 @@ export default function AdminPage() {
                         {group.placa}
                       </button>
                     </td>
-                    <td className="px-4 py-3 text-sm text-[var(--foreground)]">{group.records.length}</td>
+                    <td className="px-4 py-3 text-sm text-[var(--foreground)]">{new Date(group.latest.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}</td>
                     <td className="px-4 py-3 text-sm text-[var(--foreground)]">{group.latest.vehiculo.conductor}</td>
                     <td className="px-4 py-3 text-sm text-[var(--muted)]">
-                      {new Date(group.latest.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}
+                      {new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}
                     </td>
                     <td className="px-4 py-3">
                       <span
