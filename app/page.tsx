@@ -129,7 +129,7 @@ function resolveInspectionValidationDate(rawDate: string) {
 
 function isDocumentExpired(dateValue: string, referenceDate: string) {
   if (!dateValue) return false;
-  return dateValue < referenceDate;
+  return dateValue <= referenceDate;
 }
 
 function isDocumentationChecklistItem(itemId: string) {
@@ -408,7 +408,7 @@ const initialVehicle: VehicleRegistration = {
   ruta: "",
   conductor: "",
   licenciaConduccion: "",
-  inspector: "",
+  inspector: "Daury Dumar",
   fechaInspeccion: "",
   horaInspeccion: "",
 };
@@ -954,7 +954,7 @@ export default function Home() {
             />
             <Field
               isDarkMode={isDarkMode}
-              label="Interno"
+              label="Número de celular"
               value={vehicleDraft.interno}
               placeholder="Movil 12"
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, interno: value }))}
@@ -1022,11 +1022,12 @@ export default function Home() {
               placeholder="12345678"
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, licenciaConduccion: value }))}
             />
-            <Field
+            <ComboField
               isDarkMode={isDarkMode}
               label="Inspector responsable *"
               value={vehicleDraft.inspector}
-              placeholder="Inspector PESV"
+              options={["Daury Dumar"]}
+              placeholder="Daury Dumar"
               onChange={(value) => setVehicleDraft((prev) => ({ ...prev, inspector: value }))}
             />
             <DateField

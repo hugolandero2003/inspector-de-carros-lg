@@ -44,6 +44,7 @@ type InspectionRecord = {
       estado: string;
       criticidad: string;
       seccion?: string;
+      vencimiento?: string;
     }>;
   };
 };
@@ -94,6 +95,18 @@ type EditInspectionForm = {
   checklist: InspectionRecord["inspeccion"]["checklist"];
 };
 
+type DocumentExpirations = {
+  soat: string;
+  tecnomecanica: string;
+  licencia: string;
+};
+
+const initialDocumentExpirations: DocumentExpirations = {
+  soat: "-",
+  tecnomecanica: "-",
+  licencia: "-",
+};
+
 const ITEMS_PER_PAGE = 8;
 
 function normalizePlate(plate: string) {
@@ -117,6 +130,18 @@ function isSameDay(dateValue: string, referenceDate: Date) {
     date.getMonth() === referenceDate.getMonth() &&
     date.getDate() === referenceDate.getDate()
   );
+}
+
+function extractDocumentExpirationsFromChecklist(checklist: InspectionRecord["inspeccion"]["checklist"]) {
+  if (!Array.isArray(checklist)) {
+    return initialDocumentExpirations;
+  }
+
+  const soat = checklist.find((item) => item.id === "doc_soat")?.vencimiento ?? "-";
+  const tecnomecanica = checklist.find((item) => item.id === "doc_tecno")?.vencimiento ?? "-";
+  const licencia = checklist.find((item) => item.id === "doc_licencia")?.vencimiento ?? "-";
+
+  return { soat, tecnomecanica, licencia };
 }
 
 function buildEditForm(record: InspectionRecord): EditInspectionForm {
@@ -254,6 +279,11 @@ export default function AdminPage() {
     if (!selectedPlate) return null;
     return groupedVehicles.find((group) => group.placa === normalizePlate(selectedPlate)) ?? null;
   }, [groupedVehicles, selectedPlate]);
+
+  const selectedRecordDocumentExpirations = useMemo(
+    () => extractDocumentExpirationsFromChecklist(selectedRecord?.inspeccion.checklist ?? []),
+    [selectedRecord],
+  );
 
   useEffect(() => {
     setCurrentPage(1);
@@ -1541,6 +1571,24 @@ export default function AdminPage() {
                       <div><p className="text-xs text-[var(--muted)]">Inspector</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.inspector}</p></div>
                       <div><p className="text-xs text-[var(--muted)]">Fecha</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.fechaInspeccion}</p></div>
                       <div><p className="text-xs text-[var(--muted)]">Hora</p><p className="text-sm font-semibold text-[var(--foreground)]">{selectedRecord.vehiculo.horaInspeccion}</p></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.18em] text-[var(--muted)]">Documentación y vencimientos</h3>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3">
+                        <p className="text-xs text-[var(--muted)]">SOAT</p>
+                        <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">{selectedRecordDocumentExpirations.soat}</p>
+                      </div>
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3">
+                        <p className="text-xs text-[var(--muted)]">Tecnomecánica</p>
+                        <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">{selectedRecordDocumentExpirations.tecnomecanica}</p>
+                      </div>
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3">
+                        <p className="text-xs text-[var(--muted)]">Licencia de conducción</p>
+                        <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">{selectedRecordDocumentExpirations.licencia}</p>
+                      </div>
                     </div>
                   </div>
 
