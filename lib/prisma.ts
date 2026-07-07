@@ -12,14 +12,14 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL no está definida");
 }
 
-const disableSslVerify =
-  process.env.NODE_ENV !== "production" && process.env.DB_SSL_NO_VERIFY !== "false";
-
 const pool =
   globalForPrisma.pgPool ||
   new Pool({
     connectionString: databaseUrl,
-    ssl: disableSslVerify ? { rejectUnauthorized: false } : undefined,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 30000,
+    idleTimeoutMillis: 60000,
+    max: 5,
   });
 const adapter = new PrismaPg(pool);
 

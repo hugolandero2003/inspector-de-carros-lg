@@ -462,6 +462,7 @@ export default function Home() {
   const [requiresLicenseExpirationUpdate, setRequiresLicenseExpirationUpdate] = useState(false);
   const [dailyPlateLocked, setDailyPlateLocked] = useState(false);
   const [successModal, setSuccessModal] = useState<{
+    placa: string;
     concepto: Concepto;
     noCumpleCriticos: string[];
     shareMessage: string;
@@ -845,6 +846,7 @@ export default function Home() {
     }
 
     setSuccessModal({
+      placa: activeVehicle.placa,
       concepto: conceptoSugerido,
       noCumpleCriticos: findings.noCumpleCriticos,
       shareMessage: buildInspectionSuccessShareMessage({
@@ -1306,6 +1308,9 @@ export default function Home() {
                 <h2 className="text-center text-xl font-bold text-slate-900">¡Registro creado con éxito!</h2>
                 <p className="mt-2 text-center text-sm text-slate-500">
                   La inspección fue guardada correctamente.
+                </p>
+                <p className="mt-1 text-center text-sm font-semibold text-slate-700">
+                  Placa: {successModal.placa}
                 </p>
 
                 {/* Concepto */}

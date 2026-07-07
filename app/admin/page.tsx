@@ -101,6 +101,20 @@ type DocumentExpirations = {
   licencia: string;
 };
 
+type PendingNotifStatus = "pendiente" | "notificado" | "atendido";
+
+type PendingPlateEntry = {
+  placa: string;
+  conductor: string;
+  interno: string;
+  tipo: string;
+  marca: string;
+  modelo: string;
+  ruta: string;
+  inspector: string;
+  status: PendingNotifStatus;
+};
+
 const initialDocumentExpirations: DocumentExpirations = {
   soat: "-",
   tecnomecanica: "-",
@@ -185,6 +199,8 @@ export default function AdminPage() {
   const [now, setNow] = useState(() => new Date());
   const [showPdfDateModal, setShowPdfDateModal] = useState(false);
   const [selectedExportDate, setSelectedExportDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [showPendingModal, setShowPendingModal] = useState(false);
+  const [pendingNotifStatuses, setPendingNotifStatuses] = useState<Record<string, PendingNotifStatus>>({});
   const router = useRouter();
   const auth = useAuth();
 
@@ -332,6 +348,45 @@ export default function AdminPage() {
     () => records.filter((record) => isSameDay(record.inspeccion.fechaRegistro, now)),
     [records, now],
   );
+
+  const getBogotaToday = () => {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  };
+
+  const platesWithoutTodayInspection = useMemo<PendingPlateEntry[]>(() => {
+    const todayStr = getBogotaToday();
+    const inspectedTodayPlates = new Set(
+      records
+        .filter((r) => r.vehiculo.fechaInspeccion === todayStr)
+        .map((r) => normalizePlate(r.vehiculo.placa)),
+    );
+
+    const allPlates = Array.from(
+      new Map(
+        records.map((r) => [normalizePlate(r.vehiculo.placa), r]),
+      ).values(),
+    );
+
+    return allPlates
+      .filter((r) => !inspectedTodayPlates.has(normalizePlate(r.vehiculo.placa)))
+      .map((r) => ({
+        placa: normalizePlate(r.vehiculo.placa),
+        conductor: r.vehiculo.conductor,
+        interno: r.vehiculo.interno,
+        tipo: r.vehiculo.tipo,
+        marca: r.vehiculo.marca,
+        modelo: r.vehiculo.modelo,
+        ruta: r.vehiculo.ruta,
+        inspector: r.vehiculo.inspector,
+        status: (pendingNotifStatuses[normalizePlate(r.vehiculo.placa)] ?? "pendiente") as PendingNotifStatus,
+      }))
+      .sort((a, b) => a.placa.localeCompare(b.placa));
+  }, [records, pendingNotifStatuses]);
 
   const recordsForSelectedExportDate = useMemo(() => {
     const [year, month, day] = selectedExportDate.split("-").map(Number);
@@ -598,6 +653,62 @@ export default function AdminPage() {
     link.click();
     link.remove();
     window.URL.revokeObjectURL(url);
+  };
+
+  const exportPendingPdf = (items: PendingPlateEntry[], dateLabel: string) => {
+    if (items.length === 0) return;
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, pageW, 22, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("VEHÍCULOS SIN INSPECCIÓN DIARIA", pageW / 2, 10, { align: "center" });
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Fecha: ${dateLabel}   |   Pendientes: ${items.length}   |   Reporte generado: ${today}`, pageW / 2, 17, { align: "center" });
+
+    autoTable(doc, {
+      startY: 28,
+      head: [["Placa", "Interno", "Tipo", "Marca / Modelo", "Conductor", "Ruta", "Inspector asignado", "Estado notificación"]],
+      body: items.map((p) => [
+        p.placa,
+        p.interno || "-",
+        p.tipo || "-",
+        `${p.marca} ${p.modelo}`.trim() || "-",
+        p.conductor || "-",
+        p.ruta || "-",
+        p.inspector || "-",
+        p.status === "notificado" ? "Notificado" : p.status === "atendido" ? "Atendido" : "Pendiente",
+      ]),
+      headStyles: { fillColor: [180, 90, 20], textColor: 255, fontStyle: "bold", fontSize: 8 },
+      bodyStyles: { fontSize: 7.5, textColor: [30, 30, 30] },
+      alternateRowStyles: { fillColor: [255, 247, 237] },
+      columnStyles: {
+        0: { fontStyle: "bold", cellWidth: 18 },
+        7: { fontStyle: "bold", cellWidth: 32, halign: "center" },
+      },
+      didParseCell(data) {
+        if (data.column.index === 7 && data.section === "body") {
+          const val = String(data.cell.raw);
+          data.cell.styles.textColor =
+            val === "Atendido" ? [5, 150, 105] : val === "Notificado" ? [30, 64, 175] : [180, 30, 30];
+        }
+      },
+      margin: { left: 8, right: 8 },
+    });
+
+    const totalPagesDoc = doc.getNumberOfPages();
+    for (let p = 1; p <= totalPagesDoc; p++) {
+      doc.setPage(p);
+      doc.setFontSize(7);
+      doc.setTextColor(150);
+      doc.text(`Sistema PESV — Página ${p} de ${totalPagesDoc}`, pageW / 2, doc.internal.pageSize.getHeight() - 4, { align: "center" });
+    }
+
+    doc.save(`Pendientes_Inspeccion_${getBogotaToday()}.pdf`);
   };
 
   const exportPdf = (items: InspectionRecord[], title: string, suffix: string, includeDetails = true) => {
@@ -897,6 +1008,15 @@ export default function AdminPage() {
             <p className="mt-2 text-3xl font-bold text-[var(--accent)]">{recordsCreatedToday.length}</p>
             <p className="mt-1 text-xs text-[var(--muted)]">{now.toLocaleDateString("es-CO")}</p>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowPendingModal(true)}
+            className="rounded-2xl border border-orange-300/40 bg-orange-50 p-4 shadow-[var(--shadow)] text-left transition hover:brightness-95 dark:bg-orange-950/30 dark:border-orange-500/25"
+          >
+            <p className="text-sm font-semibold text-orange-700 dark:text-orange-400">Sin inspección hoy</p>
+            <p className="mt-2 text-3xl font-bold text-orange-600 dark:text-orange-400">{platesWithoutTodayInspection.length}</p>
+            <p className="mt-1 text-xs text-orange-500 dark:text-orange-500">Toca para ver placas pendientes</p>
+          </button>
         </div>
 
         {/* Filters and Actions */}
@@ -962,6 +1082,121 @@ export default function AdminPage() {
             </div>
           </div>
         </div>
+
+        {showPendingModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-[var(--shadow)] sm:p-6">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-[var(--foreground)]">Vehículos sin inspección hoy</h2>
+                  <p className="text-sm text-[var(--muted)]">
+                    {platesWithoutTodayInspection.length} placa{platesWithoutTodayInspection.length !== 1 ? "s" : ""} pendiente{platesWithoutTodayInspection.length !== 1 ? "s" : ""} · {getBogotaToday()}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => exportPendingPdf(platesWithoutTodayInspection, getBogotaToday())}
+                    disabled={platesWithoutTodayInspection.length === 0}
+                    className="flex items-center gap-1.5 rounded-xl border border-orange-300/40 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700 transition hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-orange-950/30 dark:text-orange-400"
+                  >
+                    <ArrowDownTrayIcon className="h-4 w-4" />
+                    PDF pendientes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPendingModal(false)}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-2 text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                  >
+                    <XMarkIcon className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+
+              {platesWithoutTodayInspection.length === 0 ? (
+                <div className="flex flex-1 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center">
+                  <div>
+                    <p className="text-2xl">✅</p>
+                    <p className="mt-2 font-semibold text-[var(--foreground)]">Todos los vehículos registrados han hecho su inspección hoy.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 z-10">
+                      <tr className="border-b border-[var(--border)] bg-[var(--surface-muted)]">
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Placa</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)] hidden sm:table-cell">Interno</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)] hidden md:table-cell">Conductor</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)] hidden lg:table-cell">Tipo / Marca</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)] hidden lg:table-cell">Ruta</th>
+                        <th className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Estado</th>
+                        <th className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--border)]">
+                      {platesWithoutTodayInspection.map((entry) => {
+                        const status = pendingNotifStatuses[entry.placa] ?? "pendiente";
+                        return (
+                          <tr key={entry.placa} className="transition hover:bg-[var(--surface-muted)]">
+                            <td className="px-3 py-2.5">
+                              <span className="inline-flex rounded-full border border-orange-300/40 bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700 dark:bg-orange-950/30 dark:text-orange-400">
+                                {entry.placa}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-[var(--foreground)] hidden sm:table-cell">{entry.interno || "-"}</td>
+                            <td className="px-3 py-2.5 text-[var(--foreground)] hidden md:table-cell">{entry.conductor || "-"}</td>
+                            <td className="px-3 py-2.5 text-[var(--muted)] hidden lg:table-cell">{entry.tipo} · {entry.marca} {entry.modelo}</td>
+                            <td className="px-3 py-2.5 text-[var(--muted)] hidden lg:table-cell">{entry.ruta || "-"}</td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${
+                                  status === "atendido"
+                                    ? "border-[var(--success)]/25 bg-[var(--success-soft)] text-[var(--success)]"
+                                    : status === "notificado"
+                                      ? "border-[var(--accent)]/25 bg-[var(--accent-soft)] text-[var(--accent)]"
+                                      : "border-orange-300/40 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400"
+                                }`}
+                              >
+                                {status === "atendido" ? "Atendido" : status === "notificado" ? "Notificado" : "Pendiente"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              <select
+                                value={status}
+                                onChange={(e) =>
+                                  setPendingNotifStatuses((prev) => ({
+                                    ...prev,
+                                    [entry.placa]: e.target.value as PendingNotifStatus,
+                                  }))
+                                }
+                                className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent-soft)]"
+                              >
+                                <option value="pendiente">Pendiente</option>
+                                <option value="notificado">Notificado</option>
+                                <option value="atendido">Atendido</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowPendingModal(false)}
+                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-5 py-2.5 text-sm font-semibold text-[var(--foreground)] transition hover:bg-[var(--surface-strong)]"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showPdfDateModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
