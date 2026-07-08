@@ -128,6 +128,12 @@ function normalizePlate(plate: string) {
 }
 
 function getRecordTimestamp(record: InspectionRecord) {
+  // Ordenar por fecha real de la inspección, no por fecha de creación del registro
+  const fechaInsp = record.vehiculo.fechaInspeccion;
+  if (fechaInsp) {
+    const ts = new Date(fechaInsp + "T12:00:00").getTime();
+    if (!Number.isNaN(ts)) return ts;
+  }
   const timestamp = new Date(record.inspeccion.fechaRegistro).getTime();
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
@@ -284,11 +290,16 @@ export default function AdminPage() {
     if (!selectedPlate) return [];
     return records
       .filter((record) => normalizePlate(record.vehiculo.placa) === normalizePlate(selectedPlate))
-      .sort(
-        (a, b) =>
-          new Date(b.inspeccion.fechaRegistro).getTime() -
-          new Date(a.inspeccion.fechaRegistro).getTime(),
-      );
+      .sort((a, b) => {
+        // Primero por fecha de inspección (más reciente arriba)
+        const dateDiff = b.vehiculo.fechaInspeccion.localeCompare(a.vehiculo.fechaInspeccion);
+        if (dateDiff !== 0) return dateDiff;
+        // Desempate por hora de inspección
+        const horaDiff = b.vehiculo.horaInspeccion.localeCompare(a.vehiculo.horaInspeccion);
+        if (horaDiff !== 0) return horaDiff;
+        // Último desempate por createdAt
+        return new Date(b.inspeccion.fechaRegistro).getTime() - new Date(a.inspeccion.fechaRegistro).getTime();
+      });
   }, [records, selectedPlate]);
 
   const selectedPlateGroup = useMemo(() => {
@@ -359,7 +370,12 @@ export default function AdminPage() {
   };
 
   const platesWithoutTodayInspection = useMemo<PendingPlateEntry[]>(() => {
-    const todayStr = getBogotaToday();
+    const todayStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
     const inspectedTodayPlates = new Set(
       records
         .filter((r) => r.vehiculo.fechaInspeccion === todayStr)
@@ -386,7 +402,7 @@ export default function AdminPage() {
         status: (pendingNotifStatuses[normalizePlate(r.vehiculo.placa)] ?? "pendiente") as PendingNotifStatus,
       }))
       .sort((a, b) => a.placa.localeCompare(b.placa));
-  }, [records, pendingNotifStatuses]);
+  }, [records, pendingNotifStatuses, now]);
 
   const recordsForSelectedExportDate = useMemo(() => {
     const [year, month, day] = selectedExportDate.split("-").map(Number);
@@ -1331,7 +1347,7 @@ export default function AdminPage() {
                       <span className="inline-flex rounded-full border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-3 py-1 text-sm font-bold text-[var(--accent)]">
                         {group.placa}
                       </span>
-                      <span className="text-xs font-semibold text-[var(--muted)]">{new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}</span>
+                      <span className="text-xs font-semibold text-[var(--muted)]">{group.latest.vehiculo.fechaInspeccion} {group.latest.vehiculo.horaInspeccion}</span>
                     </div>
 
                     {mobileListMode === "detailed" ? (
@@ -1342,11 +1358,11 @@ export default function AdminPage() {
                         </div>
                         <div>
                           <p className="text-xs text-[var(--muted)]">Registro creado</p>
-                          <p className="font-semibold text-[var(--foreground)]">{new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}</p>
+                          <p className="font-semibold text-[var(--foreground)]">{group.latest.vehiculo.fechaInspeccion} {group.latest.vehiculo.horaInspeccion}</p>
                         </div>
                       </div>
                     ) : (
-                      <p className="mt-2 text-xs text-[var(--muted)]">{group.latest.vehiculo.conductor} · {new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}</p>
+                      <p className="mt-2 text-xs text-[var(--muted)]">{group.latest.vehiculo.conductor} · {group.latest.vehiculo.fechaInspeccion} {group.latest.vehiculo.horaInspeccion}</p>
                     )}
 
                     <div className={mobileListMode === "compact" ? "mt-2" : "mt-3"}>
@@ -1408,9 +1424,9 @@ export default function AdminPage() {
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--surface-muted)]">
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Placa</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Creado</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Fecha inspección</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Último conductor</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Fecha y hora</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Hora</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Concepto</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">Acciones</th>
                 </tr>
@@ -1446,11 +1462,9 @@ export default function AdminPage() {
                         {group.placa}
                       </button>
                     </td>
-                    <td className="px-4 py-3 text-sm text-[var(--foreground)]">{new Date(group.latest.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}</td>
+                    <td className="px-4 py-3 text-sm font-semibold text-[var(--foreground)]">{group.latest.vehiculo.fechaInspeccion}</td>
                     <td className="px-4 py-3 text-sm text-[var(--foreground)]">{group.latest.vehiculo.conductor}</td>
-                    <td className="px-4 py-3 text-sm text-[var(--muted)]">
-                      {new Date(group.latest.inspeccion.fechaRegistro).toLocaleString("es-CO")}
-                    </td>
+                    <td className="px-4 py-3 text-sm text-[var(--muted)]">{group.latest.vehiculo.horaInspeccion}</td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${
@@ -1593,7 +1607,7 @@ export default function AdminPage() {
                           <div className="flex items-center justify-between gap-3">
                             <div>
                               <p className="text-sm font-semibold text-[var(--foreground)]">
-                                {new Date(record.inspeccion.fechaRegistro).toLocaleString("es-CO")}
+                                {record.vehiculo.fechaInspeccion} {record.vehiculo.horaInspeccion}
                               </p>
                               <p className="text-xs text-[var(--muted)]">
                                 Conductor: {record.vehiculo.conductor} · Inspector: {record.vehiculo.inspector}

@@ -559,6 +559,8 @@ export default function Home() {
     }
   };
 
+  const PLATE_REGEX = /^[A-Z]{3}[0-9]{2,3}[A-Z]?$/;
+
   const handlePlateBlur = async () => {
     const normalizedPlate = normalizePlate(vehicleDraft.placa);
     const targetDate = resolveInspectionValidationDate(vehicleDraft.fechaInspeccion);
@@ -566,6 +568,12 @@ export default function Home() {
     setDailyPlateLocked(false);
 
     if (!normalizedPlate || normalizedPlate.length < 5) {
+      return;
+    }
+
+    if (!PLATE_REGEX.test(normalizedPlate)) {
+      setPlateHint("Formato de placa inválido. Usa el formato ABC123 (3 letras seguidas de 2 o 3 números).");
+      setIsPrefillingPlate(false);
       return;
     }
 
@@ -668,6 +676,14 @@ export default function Home() {
     });
   }, [vehicleDraft]);
 
+  // Re-verificar el bloqueo de la placa cuando cambia la fecha de inspección
+  useEffect(() => {
+    const plate = normalizePlate(vehicleDraft.placa);
+    const date = vehicleDraft.fechaInspeccion.trim();
+    if (!plate || plate.length < 5 || !date) return;
+    void checkPlateLockForDate(plate, date);
+  }, [vehicleDraft.fechaInspeccion]);
+
   useEffect(() => {
     const currentConductor = vehicleDraft.conductor.trim().toLowerCase();
     if (!currentConductor || !lastPrefilledConductor) {
@@ -733,6 +749,18 @@ export default function Home() {
 
     if (missingVehicleFields.length > 0) {
       setError("Completa los campos obligatorios del encabezado para registrar el vehiculo.");
+      return;
+    }
+
+    const plateToCheck = normalizePlate(vehicleDraft.placa);
+    const PLATE_REGEX_REG = /^[A-Z]{3}[0-9]{2,3}[A-Z]?$/;
+    if (!PLATE_REGEX_REG.test(plateToCheck)) {
+      setError("El formato de la placa es inválido. Debe ser tipo ABC123 (3 letras seguidas de 2 o 3 números).");
+      return;
+    }
+
+    if (dailyPlateLocked) {
+      setError(DUPLICATE_DAILY_PLATE_MESSAGE);
       return;
     }
 
