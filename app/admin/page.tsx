@@ -556,7 +556,7 @@ export default function AdminPage() {
       return;
     }
 
-    if (!confirm(`¿Seguro que quieres eliminar el checklist del día ${new Date(record.inspeccion.fechaRegistro).toLocaleDateString("es-CO")}? Esta acción no elimina el carro ni el usuario.`)) {
+    if (!confirm(`¿Seguro que quieres eliminar el checklist del día ${record.vehiculo.fechaInspeccion}? Esta acción no elimina el carro ni el usuario.`)) {
       return;
     }
 
@@ -1019,11 +1019,15 @@ export default function AdminPage() {
               {records.filter((r) => r.inspeccion.conceptoFinal === "No apto").length}
             </p>
           </div>
-          <div className="rounded-2xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] p-4 shadow-[var(--shadow)] backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handleOpenExportDateModal}
+            className="rounded-2xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] p-4 shadow-[var(--shadow)] backdrop-blur-sm text-left transition hover:brightness-95"
+          >
             <p className="text-sm font-semibold text-[var(--muted)]">Registros creados en el día</p>
             <p className="mt-2 text-3xl font-bold text-[var(--accent)]">{recordsCreatedToday.length}</p>
-            <p className="mt-1 text-xs text-[var(--muted)]">{now.toLocaleDateString("es-CO")}</p>
-          </div>
+            <p className="mt-1 text-xs text-[var(--muted)]">{now.toLocaleDateString("es-CO")} · Toca para ver PDF</p>
+          </button>
           <button
             type="button"
             onClick={() => setShowPendingModal(true)}
