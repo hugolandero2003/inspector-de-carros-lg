@@ -355,10 +355,15 @@ export default function AdminPage() {
     };
   }, []);
 
-  const recordsCreatedToday = useMemo(
-    () => records.filter((record) => isSameDay(record.inspeccion.fechaRegistro, now)),
-    [records, now],
-  );
+  const recordsCreatedToday = useMemo(() => {
+    const todayBogota = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+    return records.filter((record) => record.vehiculo.fechaInspeccion === todayBogota);
+  }, [records, now]);
 
   const getBogotaToday = () => {
     return new Intl.DateTimeFormat("en-CA", {
@@ -405,14 +410,8 @@ export default function AdminPage() {
   }, [records, pendingNotifStatuses, now]);
 
   const recordsForSelectedExportDate = useMemo(() => {
-    const [year, month, day] = selectedExportDate.split("-").map(Number);
-
-    if (!year || !month || !day) {
-      return [];
-    }
-
-    const selectedDate = new Date(year, month - 1, day, 12, 0, 0);
-    return records.filter((record) => isSameDay(record.inspeccion.fechaRegistro, selectedDate));
+    if (!selectedExportDate) return [];
+    return records.filter((record) => record.vehiculo.fechaInspeccion === selectedExportDate);
   }, [records, selectedExportDate]);
 
   const loadRecords = async (token: string) => {
